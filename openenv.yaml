@@ -1,8 +1,9 @@
 ﻿name: llmfleet-sre
 version: "1.0.0"
+emoji: 🐢
 colorFrom: blue
-colorTo: purple
-emoji: 🚀
+colorTo: gray
+sdk: docker
 description: >
   An LLM agent manages a simulated GPU inference cluster — loading models,
   routing requests, recovering crashed nodes, and meeting SLA tiers.

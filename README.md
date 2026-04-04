@@ -1,8 +1,8 @@
 ﻿---
-title: LLMFleet-SRE
-emoji: 🖥️
+title: Llmfleet Sre
+emoji: 🐢
 colorFrom: blue
-colorTo: purple
+colorTo: gray
 sdk: docker
 app_port: 7860
 tags:
