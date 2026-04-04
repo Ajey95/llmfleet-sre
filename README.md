@@ -15,7 +15,7 @@ tags:
   - agent
   - rl-environment
 license: mit
-short_description: RL env where an LLM agent manages a simulated GPU inference cluster
+short_description: LLM agent managing a simulated GPU inference cluster
 ---
 
 # LLMFleet-SRE
