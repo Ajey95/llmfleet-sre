@@ -1,0 +1,26 @@
+﻿name: llmfleet-sre
+version: "1.0.0"
+colorFrom: blue
+colorTo: purple
+emoji: 🚀
+description: >
+  An LLM agent manages a simulated GPU inference cluster — loading models,
+  routing requests, recovering crashed nodes, and meeting SLA tiers.
+  All compute is simulated; no GPU required.
+author: Ajeya95
+tasks:
+  - name: task_easy
+    description: Route 5 queued chat requests to a node that already has the model loaded.
+    difficulty: easy
+  - name: task_medium
+    description: Recover an OOM-crashed node and clear a backing-up request queue under latency pressure.
+    difficulty: medium
+  - name: task_hard
+    description: Evict chat models, load a code model, and serve a mixed premium/best-effort queue.
+    difficulty: hard
+tags:
+  - openenv
+  - inference
+  - sre
+  - llm-ops
+  - scheduling
