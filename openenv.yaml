@@ -19,6 +19,9 @@ tasks:
   - name: task_hard
     description: Evict chat models, load a code model, and serve a mixed premium/best-effort queue.
     difficulty: hard
+  - name: task_longhaul
+    description: Sustain cluster performance across a 50-step episode with a quiet-to-spike-to-quiet traffic shift.
+    difficulty: hard
 tags:
   - openenv
   - inference

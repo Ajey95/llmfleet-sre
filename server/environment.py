@@ -32,11 +32,11 @@ except ImportError:
 #  Static catalogue of available models 
 
 MODEL_CATALOGUE: Dict[str, ModelSpec] = {
-    "llama3-8b-chat":    ModelSpec(name="llama3-8b-chat",    vram_gb=18),
-    "llama3-70b-chat":   ModelSpec(name="llama3-70b-chat",   vram_gb=45),
-    "codellama-34b":     ModelSpec(name="codellama-34b",     vram_gb=35),
-    "mistral-7b-sum":    ModelSpec(name="mistral-7b-sum",    vram_gb=16),
-    "code-lora-adapter": ModelSpec(name="code-lora-adapter", vram_gb=8),
+    "llama3-8b-chat":    ModelSpec(name="llama3-8b-chat",    vram_gb=18, cost_per_step=0.10),
+    "llama3-70b-chat":   ModelSpec(name="llama3-70b-chat",   vram_gb=45, cost_per_step=0.35),
+    "codellama-34b":     ModelSpec(name="codellama-34b",     vram_gb=35, cost_per_step=0.25),
+    "mistral-7b-sum":    ModelSpec(name="mistral-7b-sum",    vram_gb=16, cost_per_step=0.08),
+    "code-lora-adapter": ModelSpec(name="code-lora-adapter", vram_gb=8,  cost_per_step=0.05),
 }
 
 # Task type  required model mapping
@@ -95,6 +95,11 @@ class LLMFleetEnvironment(Environment):
         if seed is not None:
             self.rng = random.Random(seed)
         self._reset_internal()
+        # Set step budget based on task
+        if self.task_name == "task_longhaul":
+            self.step_budget = 50
+        else:
+            self.step_budget = 30
         self._setup_for_task()
         return self._observe("Episode started.", reward=0.0, done=False)
 
@@ -118,6 +123,19 @@ class LLMFleetEnvironment(Environment):
         # Execute agent action
         result_msg, action_reward = self._execute_action(action)
         reward += action_reward
+
+        # Cost penalty: penalize expensive loaded models when cheaper ones could serve
+        for node in self._nodes.values():
+            if node.status == "healthy":
+                for model_name in node.loaded_models:
+                    spec = MODEL_CATALOGUE[model_name]
+                    can_serve_with_cheaper = any(
+                        req.required_model != model_name
+                        and MODEL_CATALOGUE.get(req.required_model, spec).cost_per_step < spec.cost_per_step
+                        for req in self._request_queue
+                    )
+                    if can_serve_with_cheaper:
+                        reward -= 0.02 * spec.cost_per_step
 
         # SLA violation check (after action so agent gets credit for fast routing)
         for req in self._request_queue:
@@ -288,19 +306,64 @@ class LLMFleetEnvironment(Environment):
             for _ in range(3):
                 self._add_request("chat", "best_effort")
 
+        elif self.task_name == "task_longhaul":
+            # Mixed cluster: some models loaded, some free VRAM
+            # Agent starts in a balanced state - challenge is sustaining it
+            self._nodes["node_a"].loaded_models = ["llama3-8b-chat"]
+            self._nodes["node_a"].vram_used_gb = 18
+            self._nodes["node_b"].loaded_models = ["mistral-7b-sum"]
+            self._nodes["node_b"].vram_used_gb = 16
+            self._nodes["node_c"].loaded_models = []
+            self._nodes["node_c"].vram_used_gb = 0
+            # Seed with a small quiet-period queue
+            for _ in range(3):
+                self._add_request("chat", "best_effort")
+            for _ in range(2):
+                self._add_request("summarize", "best_effort")
+
     def _inject_requests(self):
         """Inject new requests each step based on task."""
         if len(self._request_queue) >= MAX_QUEUE_SIZE:
             return
+
+        # Traffic pattern shifts based on step
+        if self._step < 10:
+            arrival_rate = 0.3   # quiet
+        elif self._step < 25:
+            arrival_rate = 0.8   # spike
+        else:
+            arrival_rate = 0.3   # quiet again
+
+        # Poisson arrival: each step, requests arrive probabilistically
         if self.task_name == "task_easy":
-            pass  # Fixed queue  no new injections
+            return  # task_easy has fixed queue, no new arrivals
+
         elif self.task_name == "task_medium":
-            if self._step % 3 == 0:
-                self._add_request("chat", "premium")
+            if self.rng.random() < arrival_rate:
+                tier = "premium" if self.rng.random() < 0.5 else "best_effort"
+                self._add_request("chat", tier)
+
         elif self.task_name == "task_hard":
-            if self._step % 2 == 0:
+            if self.rng.random() < arrival_rate:
                 tier = "premium" if self.rng.random() < 0.4 else "best_effort"
                 task_type = self.rng.choice(["chat", "code"])
+                self._add_request(task_type, tier)
+
+        elif self.task_name == "task_longhaul":
+            # Traffic pattern: quiet (0-15) -> spike (16-35) -> quiet (36-50)
+            if self._step < 15:
+                rate = 0.25
+                premium_prob = 0.2
+            elif self._step < 35:
+                rate = 0.9
+                premium_prob = 0.6
+            else:
+                rate = 0.2
+                premium_prob = 0.2
+
+            if self.rng.random() < rate:
+                tier = "premium" if self.rng.random() < premium_prob else "best_effort"
+                task_type = self.rng.choice(["chat", "code", "summarize"])
                 self._add_request(task_type, tier)
 
     def _add_request(self, task_type: str, sla_tier: str):

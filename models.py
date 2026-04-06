@@ -27,6 +27,7 @@ class ModelSpec(BaseModel):
     """Static definition of an available model."""
     name: str
     vram_gb: int
+    cost_per_step: float  # relative cost while loaded
 
 
 class NodeState(BaseModel):
@@ -109,4 +110,5 @@ class LLMFleetReward(BaseModel):
     idle_penalty: float     # -0.05 per step per idle healthy node with queue > 0
     oom_penalty: float      # -0.5 for triggering an OOM crash
     sla_penalty: float      # -0.3 per premium request waiting > 5 steps
+    cost_penalty: float     # additional penalty for expensive loaded models
 

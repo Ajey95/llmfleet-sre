@@ -11,7 +11,7 @@ try:
 except ImportError:
     from models import LLMFleetState
 
-TASKS = ["task_easy", "task_medium", "task_hard"]
+TASKS = ["task_easy", "task_medium", "task_hard", "task_longhaul"]
 
 
 def grade(task_name: str, final_state: LLMFleetState) -> float:
@@ -25,6 +25,8 @@ def grade(task_name: str, final_state: LLMFleetState) -> float:
         return _grade_medium(final_state)
     elif task_name == "task_hard":
         return _grade_hard(final_state)
+    elif task_name == "task_longhaul":
+        return _grade_longhaul(final_state)
     return 0.0
 
 
@@ -66,3 +68,30 @@ def _grade_hard(state: LLMFleetState) -> float:
     sla_penalty = min(state.sla_violations * 0.15, 0.5)
     base = fraction_served - sla_penalty
     return max(0.0, min(base, 1.0))
+
+
+def _grade_longhaul(state: LLMFleetState) -> float:
+    """
+    Task: 50-step episode with traffic shift quiet -> spike -> quiet.
+    Agent must adapt policy mid-episode, not memorize a fixed sequence.
+
+    Score based on:
+    - Requests served as fraction of total that arrived
+    - SLA violations (heavier penalty than other tasks)
+    - Whether agent survived the spike without OOM
+    """
+    any_crashed = any(n.status == "oom_crashed" for n in state.nodes.values())
+
+    # Base score: throughput
+    # In 50 steps with Poisson arrivals, expect ~25-35 requests
+    # We normalize against a reasonable target of 20 served
+    target_served = 20
+    throughput_score = min(state.requests_served / target_served, 1.0)
+
+    # SLA penalty: heavier weight here because spike creates real pressure
+    sla_penalty = min(state.sla_violations * 0.08, 0.5)
+
+    # OOM penalty: crash during spike = poor score
+    oom_penalty = 0.3 if any_crashed else 0.0
+
+    return max(0.0, throughput_score - sla_penalty - oom_penalty)
