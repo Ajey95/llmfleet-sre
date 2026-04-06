@@ -10,12 +10,60 @@ import asyncio
 import json
 import os
 import sys
-from typing import List
+from typing import List, Optional
 
 from openai import OpenAI
+from openenv.core.containers.runtime.providers import LocalDockerProvider
+
+
+class Port7860DockerProvider(LocalDockerProvider):
+    """Local Docker provider that maps host ports to container port 7860."""
+
+    def start_container(self, image: str, port=None, env_vars=None, **kwargs):
+        import subprocess
+        import time
+
+        if port is None:
+            port = self._find_available_port()
+
+        self._container_name = self._generate_container_name(image)
+        cmd = [
+            "docker",
+            "run",
+            "-d",
+            "--name",
+            self._container_name,
+            "-p",
+            f"{port}:7860",
+        ]
+
+        if env_vars:
+            for key, value in env_vars.items():
+                cmd.extend(["-e", f"{key}={value}"])
+
+        cmd.append(image)
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            self._container_id = result.stdout.strip()
+        except subprocess.CalledProcessError as e:
+            error_msg = (
+                f"Failed to start Docker container.\n"
+                f"Command: {' '.join(cmd)}\n"
+                f"Exit code: {e.returncode}\n"
+                f"Stderr: {e.stderr}\n"
+                f"Stdout: {e.stdout}"
+            )
+            raise RuntimeError(error_msg) from e
+
+        time.sleep(1)
+        return f"http://localhost:{port}"
 
 #  Config 
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1")
+if "api-inference.huggingface.co" in API_BASE_URL:
+    # Keep backward compatibility with older .env values.
+    API_BASE_URL = "https://router.huggingface.co/v1"
 MODEL_NAME   = os.environ.get("MODEL_NAME",   "meta-llama/Llama-3.1-8B-Instruct")
 API_KEY      = os.environ.get("HF_TOKEN")
 IMAGE_NAME   = os.environ.get("IMAGE_NAME",   "Ajeya95/llmfleet-sre")
@@ -72,10 +120,12 @@ Available actions:
 - noop: Do nothing this step
 
 IMPORTANT RULES:
-1. Before load_model, always check: node.vram_used_gb + model_vram_gb <= node.vram_total_gb
-2. You can only route to nodes with status=healthy
+1. Before load_model, always verify: node.vram_used_gb + model_vram_gb <= node.vram_total_gb
+2. You can only route to nodes with status=healthy AND load_latency_remaining=0
 3. Premium SLA requests must be served within 5 steps or you incur -0.3 penalty each
 4. Prioritize premium requests over best_effort
+5. A node with status=loading is not yet ready - do not route to it, wait or act on other nodes
+6. Each step you take exactly one action - plan the highest priority action only
 
 Respond ONLY with a valid JSON object matching this schema:
 {
@@ -89,7 +139,7 @@ Do not explain. Return only JSON.
 """
 
 
-def get_action(client: OpenAI, obs: dict, history: List[str]) -> dict:
+def get_action(client: OpenAI, obs: dict, history: List[str]) -> Optional[dict]:
     history_str = "\n".join(history[-5:]) if history else "None yet."
     user_msg = f"""Current cluster state:
 {json.dumps(obs, indent=2)}
@@ -116,6 +166,11 @@ What is your next action?"""
                 raw = raw[4:]
         return json.loads(raw.strip())
     except Exception as e:
+        error_str = str(e)
+        # Exit cleanly on credit exhaustion rather than spamming noop.
+        if "402" in error_str or "credit" in error_str.lower():
+            print("[DEBUG] Credit exhaustion - stopping inference", flush=True)
+            return None
         print(f"[DEBUG] Model error: {e}", flush=True)
         return {"action_type": "noop", "target_node": None, "model_name": None, "request_ids": []}
 
@@ -136,7 +191,7 @@ async def main():
         return
 
     client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
-    env = await LLMFleetSreEnv.from_docker_image(IMAGE_NAME)
+    env = await LLMFleetSreEnv.from_docker_image(IMAGE_NAME, provider=Port7860DockerProvider())
 
     history: List[str] = []
     rewards: List[float] = []
@@ -156,6 +211,8 @@ async def main():
                 break
 
             action_dict = get_action(client, obs, history)
+            if action_dict is None:
+                break
             action_str = json.dumps(action_dict)
 
             try:

@@ -60,14 +60,19 @@ def _grade_medium(state: LLMFleetState) -> float:
 
 def _grade_hard(state: LLMFleetState) -> float:
     """
-    Task: Evict chat models, load code model, serve mixed premium/best_effort queue.
-    Full score only if both code AND chat queues cleared with <= 2 SLA violations.
+    Task: Randomized starting state, adversarial mid-episode arrivals.
+    Agent must learn eviction strategies across varied configurations.
+    Graded on throughput relative to total requests seen.
     """
-    total_initial = 7  # 4 code + 3 chat
-    fraction_served = state.requests_served / total_initial
-    sla_penalty = min(state.sla_violations * 0.15, 0.5)
-    base = fraction_served - sla_penalty
-    return max(0.0, min(base, 1.0))
+    total_seen = state.requests_served + len(state.request_queue) + state.requests_failed
+    if total_seen == 0:
+        return 0.0
+
+    fraction_served = state.requests_served / total_seen
+    sla_penalty = min(state.sla_violations * 0.18, 0.55)
+    oom_penalty = 0.25 if any(n.status == "oom_crashed" for n in state.nodes.values()) else 0.0
+
+    return max(0.0, min(fraction_served - sla_penalty - oom_penalty, 1.0))
 
 
 def _grade_longhaul(state: LLMFleetState) -> float:

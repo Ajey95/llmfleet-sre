@@ -155,11 +155,14 @@ class LLMFleetEnvironment(Environment):
             )
             reward -= 0.05 * idle_nodes
 
-        # Inject new requests (task-specific)
+        # Inject new requests before done check so longhaul can continue after queue drains.
         self._inject_requests()
 
         self._cumulative_reward += reward
-        done = self._step >= self.step_budget or len(self._request_queue) == 0
+        # Longhaul is a fixed-horizon task; others may end early when queue is empty.
+        done = self._step >= self.step_budget
+        if self.task_name != "task_longhaul" and len(self._request_queue) == 0:
+            done = True
 
         return self._observe(result_msg, reward=reward, done=done)
 
@@ -295,16 +298,36 @@ class LLMFleetEnvironment(Environment):
                 self._add_request("chat", "best_effort")
 
         elif self.task_name == "task_hard":
-            # All nodes full of chat models. Influx of premium code requests.
-            for node_id in ["node_a", "node_b"]:
-                self._nodes[node_id].loaded_models = ["llama3-8b-chat", "mistral-7b-sum"]
-                self._nodes[node_id].vram_used_gb = 34
-            self._nodes["node_c"].loaded_models = ["llama3-8b-chat"]
-            self._nodes["node_c"].vram_used_gb = 18
-            for _ in range(4):
-                self._add_request("code", "premium")
-            for _ in range(3):
-                self._add_request("chat", "best_effort")
+            # Randomized start prevents memorizing a fixed solution sequence.
+            chat_models = ["llama3-8b-chat", "llama3-70b-chat"]
+
+            # Node A: always carries one large chat model.
+            big_model = self.rng.choice(chat_models)
+            self._nodes["node_a"].loaded_models = [big_model]
+            self._nodes["node_a"].vram_used_gb = MODEL_CATALOGUE[big_model].vram_gb
+
+            # Node B: packed with two smaller models.
+            self._nodes["node_b"].loaded_models = ["llama3-8b-chat", "mistral-7b-sum"]
+            self._nodes["node_b"].vram_used_gb = 34
+
+            # Node C: sometimes empty, sometimes partially occupied.
+            if self.rng.random() < 0.5:
+                self._nodes["node_c"].loaded_models = ["mistral-7b-sum"]
+                self._nodes["node_c"].vram_used_gb = 16
+            else:
+                self._nodes["node_c"].loaded_models = []
+                self._nodes["node_c"].vram_used_gb = 0
+
+            # Randomized initial queue composition each episode.
+            code_count = self.rng.randint(3, 6)
+            chat_count = self.rng.randint(2, 5)
+
+            for _ in range(code_count):
+                tier = "premium" if self.rng.random() < 0.7 else "best_effort"
+                self._add_request("code", tier)
+            for _ in range(chat_count):
+                tier = "premium" if self.rng.random() < 0.5 else "best_effort"
+                self._add_request("chat", tier)
 
         elif self.task_name == "task_longhaul":
             # Mixed cluster: some models loaded, some free VRAM
@@ -345,7 +368,24 @@ class LLMFleetEnvironment(Environment):
 
         elif self.task_name == "task_hard":
             if self.rng.random() < arrival_rate:
-                tier = "premium" if self.rng.random() < 0.4 else "best_effort"
+                # Adversarial arrivals can target models currently not loaded.
+                if self.rng.random() < 0.5:
+                    loaded_models = set()
+                    for node in self._nodes.values():
+                        loaded_models.update(node.loaded_models)
+
+                    all_task_models = {"llama3-8b-chat", "codellama-34b", "mistral-7b-sum"}
+                    not_loaded = list(all_task_models - loaded_models)
+
+                    if not_loaded:
+                        needed_model = self.rng.choice(not_loaded)
+                        task_matches = [t for t, m in TASK_MODEL_MAP.items() if m == needed_model]
+                        if task_matches:
+                            tier = "premium" if self.rng.random() < 0.6 else "best_effort"
+                            self._add_request(task_matches[0], tier)
+                            return
+
+                tier = "premium" if self.rng.random() < 0.5 else "best_effort"
                 task_type = self.rng.choice(["chat", "code"])
                 self._add_request(task_type, tier)
 
