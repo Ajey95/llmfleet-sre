@@ -72,6 +72,7 @@ FALLBACK_MODELS_RAW = os.environ.get(
     "FALLBACK_MODELS",
     "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B,Qwen/Qwen2.5-Coder-3B-Instruct,google/gemma-3n-E4B-it,Qwen/Qwen2.5-7B-Instruct,Qwen/Qwen3-4B-Instruct-2507",
 )
+DEBUG_LOGS = os.environ.get("DEBUG_LOGS", "false").strip().lower() in {"1", "true", "yes", "on"}
 
 MAX_STEPS         = 25
 MAX_TOTAL_REWARD  = 1.0
@@ -80,6 +81,11 @@ MAX_COMPLETION_TOKENS = int(os.environ.get("MAX_COMPLETION_TOKENS", "120"))
 PROMPT_QUEUE_LIMIT = int(os.environ.get("PROMPT_QUEUE_LIMIT", "12"))
 
 BENCHMARK = "llmfleet-sre"
+
+
+def debug_log(message: str) -> None:
+    if DEBUG_LOGS:
+        print(f"[DEBUG] {message}", flush=True)
 
 
 def _build_model_chain(primary_model: str, fallback_raw: str) -> List[str]:
@@ -161,23 +167,27 @@ def _compact_observation(obs: dict, queue_limit: int) -> dict:
     }
 
 
-#  Logging helpers (MUST match this exact format) 
+#  Logging helpers (guideline format)
 
 def log_start(task, env, model):
-    print(json.dumps({"type": "START", "task": task, "env": env, "model": model}), flush=True)
+    print(f"[START] task={task} env={env} model={model}", flush=True)
+
 
 def log_step(step, action, reward, done, error=None):
-    print(json.dumps({
-        "type": "STEP", "step": step,
-        "action": action, "reward": reward,
-        "done": done, "error": error
-    }), flush=True)
+    done_val = str(bool(done)).lower()
+    error_val = error if error else "null"
+    print(
+        f"[STEP] step={step} action={action} reward={float(reward):.2f} done={done_val} error={error_val}",
+        flush=True,
+    )
+
 
 def log_end(success, steps, score, rewards):
-    print(json.dumps({
-        "type": "END", "success": success,
-        "steps": steps, "score": score, "rewards": rewards
-    }), flush=True)
+    rewards_str = ",".join(f"{float(r):.2f}" for r in rewards)
+    print(
+        f"[END] success={str(bool(success)).lower()} steps={steps} score={float(score):.2f} rewards={rewards_str}",
+        flush=True,
+    )
 
 
 #  Agent System Prompt 
@@ -265,7 +275,7 @@ What is your next action?"""
             # Stop immediately on quota exhaustion to avoid burning additional
             # failed requests while rotating fallbacks.
             if "402" in error_str or "credit" in error_str.lower() or "quota" in error_str.lower():
-                print("[DEBUG] Credit exhaustion - stopping inference", flush=True)
+                debug_log("Credit exhaustion - stopping inference")
                 model_state["stopped_due_credit"] = True
                 return None
 
@@ -273,13 +283,10 @@ What is your next action?"""
                 previous = model_name
                 model_state["index"] += 1
                 next_model = model_chain[model_state["index"]]
-                print(
-                    f"[DEBUG] Switching model from {previous} to {next_model} due to API error",
-                    flush=True,
-                )
+                debug_log(f"Switching model from {previous} to {next_model} due to API error")
                 continue
 
-            print(f"[DEBUG] Model error ({model_name}): {e}", flush=True)
+            debug_log(f"Model error ({model_name}): {e}")
             return {"action_type": "noop", "target_node": None, "model_name": None, "request_ids": []}
 
 
@@ -324,12 +331,12 @@ async def main():
             action_dict = get_action(client, obs, history, model_chain, model_state)
             if action_dict is None:
                 break
-            action_str = json.dumps(action_dict)
+            action_str = json.dumps(action_dict, separators=(",", ":"))
 
             try:
                 action_obj = LLMFleetAction(**action_dict)
             except Exception as e:
-                print(f"[DEBUG] Invalid LLM action format: {e}", flush=True)
+                debug_log(f"Invalid LLM action format: {e}")
                 action_obj = LLMFleetAction(action_type="noop", target_node=None, model_name=None, request_ids=[])
 
             step_result = await env.step(action_obj)
@@ -339,12 +346,16 @@ async def main():
             # get reward & done from step_result object, or from the new_obs dictionary gracefully
             reward = float(getattr(step_result, "reward", 0.0) or (new_obs.get("reward", 0.0) if isinstance(new_obs, dict) else 0.0))
             done = getattr(step_result, "done", False) or (new_obs.get("done", False) if isinstance(new_obs, dict) else False)
+            raw_error = getattr(step_result, "error", None)
+            if raw_error is None and isinstance(new_obs, dict):
+                raw_error = new_obs.get("last_action_error")
+            step_error = str(raw_error) if raw_error else None
 
             rewards.append(reward)
             steps_taken = step
             obs = new_obs
 
-            log_step(step=step, action=action_str, reward=reward, done=done)
+            log_step(step=step, action=action_str, reward=reward, done=done, error=step_error)
             history.append(f"Step {step}: {action_str}  reward {reward:+.2f}")
 
             if done:
@@ -358,7 +369,7 @@ async def main():
 
     except Exception as e:
         import traceback
-        print(f"[DEBUG] Runtime error: {e}\n{traceback.format_exc()}", flush=True)
+        debug_log(f"Runtime error: {e}\n{traceback.format_exc()}")
     finally:
         try:
             if asyncio.iscoroutinefunction(env.close):
@@ -366,7 +377,7 @@ async def main():
             else:
                 env.close()
         except Exception as e:
-            print(f"[DEBUG] env.close() error: {e}", flush=True)
+            debug_log(f"env.close() error: {e}")
         log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
 
 
