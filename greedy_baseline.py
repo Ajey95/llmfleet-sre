@@ -72,13 +72,13 @@ if __name__ == "__main__":
 
         print(f"\n{task}")
         print(f"  scores : {[f'{s:.2f}' for s in scores]}")
-        print(f"  avg={avg:.3f}  hi={hi:.3f}  lo={lo:.3f}")
+        print(f"  avg={avg:.2f}  hi={hi:.2f}  lo={lo:.2f}")
 
         if task == "task_longhaul":
             if avg < 0.50:
-                print(f"  PASS - greedy avg {avg:.3f} < 0.50 - environment requires RL")
+                print(f"  PASS - greedy avg {avg:.2f} < 0.50 - environment requires RL")
             else:
-                print(f"  FAIL - greedy avg {avg:.3f} >= 0.50 - environment still rule-based solvable")
+                print(f"  FAIL - greedy avg {avg:.2f} >= 0.50 - environment still rule-based solvable")
 
     print("\n" + "=" * 60)
     print("Interpretation:")

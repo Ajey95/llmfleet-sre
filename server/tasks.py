@@ -12,6 +12,13 @@ except ImportError:
     from models import LLMFleetState
 
 TASKS = ["task_easy", "task_medium", "task_hard", "task_longhaul"]
+STRICT_MIN_SCORE = 0.01
+STRICT_MAX_SCORE = 0.99
+
+
+def _strict_open_unit(score: float) -> float:
+    """Clamp score to strict open interval (0, 1)."""
+    return min(STRICT_MAX_SCORE, max(STRICT_MIN_SCORE, float(score)))
 
 
 def grade(task_name: str, final_state: LLMFleetState) -> float:
@@ -20,14 +27,16 @@ def grade(task_name: str, final_state: LLMFleetState) -> float:
     Returns a float in [0.0, 1.0].
     """
     if task_name == "task_easy":
-        return _grade_easy(final_state)
+        raw = _grade_easy(final_state)
     elif task_name == "task_medium":
-        return _grade_medium(final_state)
+        raw = _grade_medium(final_state)
     elif task_name == "task_hard":
-        return _grade_hard(final_state)
+        raw = _grade_hard(final_state)
     elif task_name == "task_longhaul":
-        return _grade_longhaul(final_state)
-    return 0.0
+        raw = _grade_longhaul(final_state)
+    else:
+        raw = 0.0
+    return _strict_open_unit(raw)
 
 
 def _grade_easy(state: LLMFleetState) -> float:
