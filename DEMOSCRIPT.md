@@ -1,59 +1,52 @@
-# LLMFleet-SRE Demo Script
+# LLMFleet-SRE Demo Script (Submission)
 
-This script is for a clean demo of the environment, including the longhaul step budget check.
+This is a reviewer-facing, runnable script to verify the submitted environment.
 
-## 1) Build the Docker image
+## 1) Build and run the server
 
 ```powershell
 Set-Location d:\projects\openenv\llmfleet_sre
 docker build -t llmfleet-sre:latest .
-```
-
-Expected: build succeeds and image `llmfleet-sre:latest` exists.
-
-## 2) Run locally on port 7860
-
-```powershell
 docker run --rm -d --name llmfleet-demo -p 7860:7860 llmfleet-sre:latest
 ```
 
-Expected: container starts without errors.
+Expected: container starts and serves HTTP on port 7860.
 
-## 3) Verify task list is available
+## 2) Confirm task registry
 
 ```powershell
 Invoke-RestMethod -Uri "http://localhost:7860/tasks" -Method GET
 ```
 
-Expected: includes `task_easy`, `task_medium`, `task_hard`, `task_longhaul`.
+Expected tasks: `task_easy`, `task_medium`, `task_hard`, `task_longhaul`.
 
-## 4) Verify longhaul reset uses 50-step budget
+## 3) Verify horizon settings
 
 ```powershell
-$res = Invoke-RestMethod -Uri "http://localhost:7860/reset?task_name=task_longhaul" -Method POST
-$res.observation.step_budget
+$easy = Invoke-RestMethod -Uri "http://localhost:7860/reset?task_name=task_easy" -Method POST
+$long = Invoke-RestMethod -Uri "http://localhost:7860/reset?task_name=task_longhaul" -Method POST
+"easy=$($easy.observation.step_budget) longhaul=$($long.observation.step_budget)"
 ```
 
 Expected output:
 
 ```text
-50
+easy=30 longhaul=50
 ```
 
-## 5) Quick check that easy task still resets normally
+## 4) Run greedy baseline verification
 
 ```powershell
-$res = Invoke-RestMethod -Uri "http://localhost:7860/reset?task_name=task_easy" -Method POST
-$res.observation.step_budget
+python greedy_baseline.py
 ```
 
-Expected output:
+Expected pattern:
 
-```text
-30
-```
+- `task_easy` near 1.0
+- `task_hard` below 0.5 (around 0.45)
+- `task_longhaul` below 0.5 (around 0.43)
 
-## 6) Run baseline inference logs format check
+## 5) Run inference script log-format check
 
 ```powershell
 $env:API_BASE_URL = "https://router.huggingface.co/v1"
@@ -63,19 +56,13 @@ $env:TASK_NAME = "task_easy"
 python inference.py
 ```
 
-Expected log markers in stdout:
+Required log shape:
 
-- JSON line with `"type":"START"`
-- Multiple JSON lines with `"type":"STEP"`
-- Final JSON line with `"type":"END"`
+- one `START` JSON line
+- multiple `STEP` JSON lines
+- one `END` JSON line
 
-## 7) Stop local container
-
-```powershell
-docker stop llmfleet-demo
-```
-
-## 8) Verify deployed HF Space (after push/redeploy)
+## 6) Validate deployed HF Space
 
 ```powershell
 $res = Invoke-RestMethod -Uri "https://ajeya95-llmfleet-sre.hf.space/reset?task_name=task_longhaul" -Method POST
@@ -88,4 +75,17 @@ Expected output:
 50
 ```
 
-If this still shows `30`, the Space is serving an older revision and needs another deploy cycle.
+## 7) Cleanup
+
+```powershell
+docker stop llmfleet-demo
+```
+
+---
+
+## What this demonstrates
+
+- OpenEnv-compatible API is live
+- `task_longhaul` uses the required 50-step episode budget
+- baseline scripts execute in expected format
+- hard tasks remain non-trivial for greedy policy
