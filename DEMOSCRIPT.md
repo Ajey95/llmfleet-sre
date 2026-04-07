@@ -44,7 +44,7 @@ Expected pattern:
 
 - `task_easy` near 1.0
 - `task_hard` below 0.5 (around 0.45)
-- `task_longhaul` below 0.5 (around 0.43)
+- `task_longhaul` below 0.5 (often much lower under bursty spike pressure)
 
 ## 5) Run inference script log-format check
 

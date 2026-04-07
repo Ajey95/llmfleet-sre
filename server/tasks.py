@@ -87,16 +87,18 @@ def _grade_longhaul(state: LLMFleetState) -> float:
     """
     any_crashed = any(n.status == "oom_crashed" for n in state.nodes.values())
 
-    # Base score: throughput
-    # In 50 steps with Poisson arrivals, expect ~25-35 requests
-    # We normalize against a reasonable target of 20 served
-    target_served = 20
-    throughput_score = min(state.requests_served / target_served, 1.0)
+    # Measure throughput against all work that appeared, not an easy fixed target.
+    total_seen = state.requests_served + len(state.request_queue) + state.requests_failed
+    if total_seen == 0:
+        return 0.0
 
-    # SLA penalty: heavier weight here because spike creates real pressure
-    sla_penalty = min(state.sla_violations * 0.08, 0.5)
+    throughput_score = state.requests_served / total_seen
 
-    # OOM penalty: crash during spike = poor score
+    # Strongly penalize premium SLA misses and end-of-episode backlog.
+    sla_penalty = min(state.sla_violations * 0.07, 0.6)
+    backlog_penalty = min((len(state.request_queue) / 20.0) * 0.4, 0.4)
+
+    # OOM during long spike is a major failure.
     oom_penalty = 0.3 if any_crashed else 0.0
 
-    return max(0.0, throughput_score - sla_penalty - oom_penalty)
+    return max(0.0, min(throughput_score - sla_penalty - backlog_penalty - oom_penalty, 1.0))

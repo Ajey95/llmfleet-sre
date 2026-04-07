@@ -338,9 +338,11 @@ class LLMFleetEnvironment(Environment):
             self._nodes["node_b"].vram_used_gb = 16
             self._nodes["node_c"].loaded_models = []
             self._nodes["node_c"].vram_used_gb = 0
-            # Seed with a small quiet-period queue
-            for _ in range(3):
-                self._add_request("chat", "best_effort")
+            # Seed with mixed urgent and non-urgent work to force early trade-offs.
+            for _ in range(2):
+                self._add_request("code", "premium")
+            for _ in range(2):
+                self._add_request("chat", "premium")
             for _ in range(2):
                 self._add_request("summarize", "best_effort")
 
@@ -392,19 +394,36 @@ class LLMFleetEnvironment(Environment):
         elif self.task_name == "task_longhaul":
             # Traffic pattern: quiet (0-15) -> spike (16-35) -> quiet (36-50)
             if self._step < 15:
-                rate = 0.25
+                rate = 0.35
                 premium_prob = 0.2
             elif self._step < 35:
-                rate = 0.9
-                premium_prob = 0.6
+                rate = 0.95
+                premium_prob = 0.7
             else:
-                rate = 0.2
+                rate = 0.3
                 premium_prob = 0.2
 
             if self.rng.random() < rate:
-                tier = "premium" if self.rng.random() < premium_prob else "best_effort"
-                task_type = self.rng.choice(["chat", "code", "summarize"])
-                self._add_request(task_type, tier)
+                arrivals = 1
+                if self._step >= 15 and self._step < 35:
+                    # Burstiness during spike punishes single-request greedy routing.
+                    arrivals = 2
+                    if self.rng.random() < 0.55:
+                        arrivals += 1
+
+                for _ in range(arrivals):
+                    tier = "premium" if self.rng.random() < premium_prob else "best_effort"
+                    if self._step >= 15 and self._step < 35:
+                        roll = self.rng.random()
+                        if roll < 0.55:
+                            task_type = "code"
+                        elif roll < 0.85:
+                            task_type = "chat"
+                        else:
+                            task_type = "summarize"
+                    else:
+                        task_type = self.rng.choice(["chat", "code", "summarize"])
+                    self._add_request(task_type, tier)
 
     def _add_request(self, task_type: str, sla_tier: str):
         self._request_counter += 1
