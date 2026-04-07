@@ -70,12 +70,14 @@ IMAGE_NAME   = os.environ.get("IMAGE_NAME",   "Ajeya95/llmfleet-sre")
 TASK_NAME    = os.environ.get("TASK_NAME",    "task_easy")
 FALLBACK_MODELS_RAW = os.environ.get(
     "FALLBACK_MODELS",
-    "Qwen/Qwen3-4B-Instruct-2507,Qwen/Qwen2.5-Coder-3B-Instruct,deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B,google/gemma-3n-E4B-it",
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B,Qwen/Qwen2.5-Coder-3B-Instruct,google/gemma-3n-E4B-it,Qwen/Qwen2.5-7B-Instruct,Qwen/Qwen3-4B-Instruct-2507",
 )
 
 MAX_STEPS         = 25
 MAX_TOTAL_REWARD  = 1.0
 SUCCESS_THRESHOLD = 0.6
+MAX_COMPLETION_TOKENS = int(os.environ.get("MAX_COMPLETION_TOKENS", "120"))
+PROMPT_QUEUE_LIMIT = int(os.environ.get("PROMPT_QUEUE_LIMIT", "12"))
 
 BENCHMARK = "llmfleet-sre"
 
@@ -114,6 +116,49 @@ def _should_try_next_model(error_str: str) -> bool:
             "rate limit",
         ]
     )
+
+
+def _compact_observation(obs: dict, queue_limit: int) -> dict:
+    nodes = {}
+    for node_id, node in obs.get("nodes", {}).items():
+        nodes[node_id] = {
+            "status": node.get("status"),
+            "vram_used_gb": node.get("vram_used_gb"),
+            "vram_total_gb": node.get("vram_total_gb"),
+            "loaded_models": node.get("loaded_models", []),
+            "load_latency_remaining": node.get("load_latency_remaining", 0),
+        }
+
+    queue = obs.get("request_queue", [])
+    sorted_queue = sorted(
+        queue,
+        key=lambda r: (
+            0 if r.get("sla_tier") == "premium" else 1,
+            -int(r.get("age_steps", 0)),
+        ),
+    )
+    trimmed_queue = sorted_queue[:max(1, queue_limit)]
+    compact_queue = [
+        {
+            "request_id": r.get("request_id"),
+            "required_model": r.get("required_model"),
+            "sla_tier": r.get("sla_tier"),
+            "age_steps": r.get("age_steps", 0),
+        }
+        for r in trimmed_queue
+    ]
+
+    return {
+        "step": obs.get("step", 0),
+        "step_budget": obs.get("step_budget", 0),
+        "sla_violations": obs.get("sla_violations", 0),
+        "requests_served": obs.get("requests_served", 0),
+        "queue_total": len(queue),
+        "queue_shown": len(compact_queue),
+        "nodes": nodes,
+        "request_queue": compact_queue,
+        "last_action_result": obs.get("last_action_result", ""),
+    }
 
 
 #  Logging helpers (MUST match this exact format) 
@@ -186,9 +231,10 @@ def get_action(
     model_chain: List[str],
     model_state: dict,
 ) -> Optional[dict]:
-    history_str = "\n".join(history[-5:]) if history else "None yet."
+    compact_obs = _compact_observation(obs, PROMPT_QUEUE_LIMIT)
+    history_str = "\n".join(history[-3:]) if history else "None yet."
     user_msg = f"""Current cluster state:
-{json.dumps(obs, indent=2)}
+{json.dumps(compact_obs, separators=(",", ":"))}
 
 Recent history:
 {history_str}
@@ -203,8 +249,8 @@ What is your next action?"""
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user",   "content": user_msg},
                 ],
-                max_tokens=200,
-                temperature=0.1,
+                max_tokens=MAX_COMPLETION_TOKENS,
+                temperature=0.0,
             )
             raw = resp.choices[0].message.content.strip()
             # Strip markdown fences if present
@@ -216,6 +262,13 @@ What is your next action?"""
         except Exception as e:
             error_str = str(e)
 
+            # Stop immediately on quota exhaustion to avoid burning additional
+            # failed requests while rotating fallbacks.
+            if "402" in error_str or "credit" in error_str.lower() or "quota" in error_str.lower():
+                print("[DEBUG] Credit exhaustion - stopping inference", flush=True)
+                model_state["stopped_due_credit"] = True
+                return None
+
             if _should_try_next_model(error_str) and model_state["index"] < len(model_chain) - 1:
                 previous = model_name
                 model_state["index"] += 1
@@ -225,11 +278,6 @@ What is your next action?"""
                     flush=True,
                 )
                 continue
-
-            # Exit cleanly on credit exhaustion rather than spamming noop.
-            if "402" in error_str or "credit" in error_str.lower() or "quota" in error_str.lower():
-                print("[DEBUG] Credit exhaustion - stopping inference", flush=True)
-                return None
 
             print(f"[DEBUG] Model error ({model_name}): {e}", flush=True)
             return {"action_type": "noop", "target_node": None, "model_name": None, "request_ids": []}
@@ -253,13 +301,14 @@ async def main():
     client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
     env = await LLMFleetSreEnv.from_docker_image(IMAGE_NAME, provider=Port7860DockerProvider())
     model_chain = _build_model_chain(MODEL_NAME, FALLBACK_MODELS_RAW)
-    model_state = {"index": 0}
+    model_state = {"index": 0, "stopped_due_credit": False}
 
     history: List[str] = []
     rewards: List[float] = []
     steps_taken = 0
     score = 0.0
     success = False
+    completed_episode = False
 
     log_start(task=TASK_NAME, env=BENCHMARK, model=model_chain[0])
 
@@ -299,11 +348,13 @@ async def main():
             history.append(f"Step {step}: {action_str}  reward {reward:+.2f}")
 
             if done:
+                completed_episode = True
                 break
 
         score = sum(rewards) / MAX_TOTAL_REWARD if MAX_TOTAL_REWARD > 0 else 0.0
         score = max(0.0, min(score, 1.0))
-        success = score >= SUCCESS_THRESHOLD
+        # A run that exits early (e.g., due to credits) should not be marked successful.
+        success = completed_episode and (score >= SUCCESS_THRESHOLD)
 
     except Exception as e:
         import traceback
