@@ -6,8 +6,10 @@ compatibly with openenv-core 0.2.x framework components.
 """
 
 from __future__ import annotations
+import json
 from fastapi import FastAPI
 from openenv.core.env_server import create_app
+from urllib.parse import parse_qs
 
 try:
     from ..models import LLMFleetAction, LLMFleetObservation
@@ -17,9 +19,6 @@ except ImportError:
     from models import LLMFleetAction, LLMFleetObservation
     from server.environment import LLMFleetEnvironment
     from server.tasks import TASKS
-
-_envs: dict[str, LLMFleetEnvironment] = {}
-_current_task = TASKS[0]
 
 def _env_factory():
     return LLMFleetEnvironment(task_name=TASKS[0], step_budget=30)
@@ -31,6 +30,53 @@ app = create_app(
     observation_cls=LLMFleetObservation,
     env_name="llmfleet-sre"
 )
+
+
+class ResetQueryToBodyMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope["method"] == "POST" and scope["path"] == "/reset":
+            query = parse_qs(scope.get("query_string", b"").decode())
+            payload = {}
+            if query.get("task_name"):
+                payload["task_name"] = query["task_name"][0]
+            if query.get("seed"):
+                seed_value = query["seed"][0]
+                try:
+                    payload["seed"] = int(seed_value)
+                except ValueError:
+                    payload["seed"] = seed_value
+
+            if payload:
+                body = json.dumps(payload).encode("utf-8")
+                sent = False
+
+                async def receive_wrapper():
+                    nonlocal sent
+                    if not sent:
+                        sent = True
+                        return {"type": "http.request", "body": body, "more_body": False}
+                    return {"type": "http.request", "body": b"", "more_body": False}
+
+                scope = dict(scope)
+                headers = [
+                    (name, value)
+                    for name, value in scope.get("headers", [])
+                    if name not in {b"content-type", b"content-length"}
+                ]
+                headers.append((b"content-type", b"application/json"))
+                headers.append((b"content-length", str(len(body)).encode("ascii")))
+                scope["headers"] = headers
+                scope["query_string"] = b""
+                await self.app(scope, receive_wrapper, send)
+                return
+
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(ResetQueryToBodyMiddleware)
 
 app.title = "LLMFleet-SRE"
 app.description = (
@@ -51,19 +97,6 @@ async def list_tasks():
             {"name": "task_longhaul", "difficulty": "hard", "description": "Sustain cluster performance across a 50-step episode with a quiet-to-spike-to-quiet traffic shift."},
         ]
     }
-
-
-@app.post("/reset", response_model=LLMFleetObservation)
-async def reset(task_name: str = "task_easy", seed: int | None = None):
-    global _current_task
-    _current_task = task_name
-    # Recreate env with correct step budget for this task
-    _envs[task_name] = LLMFleetEnvironment(
-        task_name=task_name,
-        step_budget=50 if task_name == "task_longhaul" else 30,
-    )
-    obs = _envs[task_name].reset(seed=seed)
-    return obs
 
 def main(host: str = "0.0.0.0", port: int = 7860):
     """Entry point for direct execution."""
