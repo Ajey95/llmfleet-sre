@@ -68,12 +68,52 @@ MODEL_NAME   = os.environ.get("MODEL_NAME",   "meta-llama/Llama-3.1-8B-Instruct"
 API_KEY      = os.environ.get("HF_TOKEN")
 IMAGE_NAME   = os.environ.get("IMAGE_NAME",   "Ajeya95/llmfleet-sre")
 TASK_NAME    = os.environ.get("TASK_NAME",    "task_easy")
+FALLBACK_MODELS_RAW = os.environ.get(
+    "FALLBACK_MODELS",
+    "Qwen/Qwen3-4B-Instruct-2507,Qwen/Qwen2.5-Coder-3B-Instruct,deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B,google/gemma-3n-E4B-it",
+)
 
 MAX_STEPS         = 25
 MAX_TOTAL_REWARD  = 1.0
 SUCCESS_THRESHOLD = 0.6
 
 BENCHMARK = "llmfleet-sre"
+
+
+def _build_model_chain(primary_model: str, fallback_raw: str) -> List[str]:
+    seen = set()
+    chain: List[str] = []
+
+    def _add(model: str):
+        model = model.strip()
+        if not model or model in seen:
+            return
+        seen.add(model)
+        chain.append(model)
+
+    _add(primary_model)
+    for model in fallback_raw.split(","):
+        _add(model)
+    return chain
+
+
+def _should_try_next_model(error_str: str) -> bool:
+    e = error_str.lower()
+    return any(
+        token in e
+        for token in [
+            "model_not_supported",
+            "not a chat model",
+            "not supported by any provider",
+            "failed_to_auth",
+            "401",
+            "402",
+            "credit",
+            "quota",
+            "429",
+            "rate limit",
+        ]
+    )
 
 
 #  Logging helpers (MUST match this exact format) 
@@ -139,7 +179,13 @@ Do not explain. Return only JSON.
 """
 
 
-def get_action(client: OpenAI, obs: dict, history: List[str]) -> Optional[dict]:
+def get_action(
+    client: OpenAI,
+    obs: dict,
+    history: List[str],
+    model_chain: List[str],
+    model_state: dict,
+) -> Optional[dict]:
     history_str = "\n".join(history[-5:]) if history else "None yet."
     user_msg = f"""Current cluster state:
 {json.dumps(obs, indent=2)}
@@ -148,31 +194,45 @@ Recent history:
 {history_str}
 
 What is your next action?"""
-    try:
-        resp = client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user",   "content": user_msg},
-            ],
-            max_tokens=200,
-            temperature=0.1,
-        )
-        raw = resp.choices[0].message.content.strip()
-        # Strip markdown fences if present
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        return json.loads(raw.strip())
-    except Exception as e:
-        error_str = str(e)
-        # Exit cleanly on credit exhaustion rather than spamming noop.
-        if "402" in error_str or "credit" in error_str.lower():
-            print("[DEBUG] Credit exhaustion - stopping inference", flush=True)
-            return None
-        print(f"[DEBUG] Model error: {e}", flush=True)
-        return {"action_type": "noop", "target_node": None, "model_name": None, "request_ids": []}
+    while True:
+        model_name = model_chain[model_state["index"]]
+        try:
+            resp = client.chat.completions.create(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user",   "content": user_msg},
+                ],
+                max_tokens=200,
+                temperature=0.1,
+            )
+            raw = resp.choices[0].message.content.strip()
+            # Strip markdown fences if present
+            if raw.startswith("```"):
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+            return json.loads(raw.strip())
+        except Exception as e:
+            error_str = str(e)
+
+            if _should_try_next_model(error_str) and model_state["index"] < len(model_chain) - 1:
+                previous = model_name
+                model_state["index"] += 1
+                next_model = model_chain[model_state["index"]]
+                print(
+                    f"[DEBUG] Switching model from {previous} to {next_model} due to API error",
+                    flush=True,
+                )
+                continue
+
+            # Exit cleanly on credit exhaustion rather than spamming noop.
+            if "402" in error_str or "credit" in error_str.lower() or "quota" in error_str.lower():
+                print("[DEBUG] Credit exhaustion - stopping inference", flush=True)
+                return None
+
+            print(f"[DEBUG] Model error ({model_name}): {e}", flush=True)
+            return {"action_type": "noop", "target_node": None, "model_name": None, "request_ids": []}
 
 
 #  Main loop 
@@ -192,6 +252,8 @@ async def main():
 
     client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
     env = await LLMFleetSreEnv.from_docker_image(IMAGE_NAME, provider=Port7860DockerProvider())
+    model_chain = _build_model_chain(MODEL_NAME, FALLBACK_MODELS_RAW)
+    model_state = {"index": 0}
 
     history: List[str] = []
     rewards: List[float] = []
@@ -199,7 +261,7 @@ async def main():
     score = 0.0
     success = False
 
-    log_start(task=TASK_NAME, env=BENCHMARK, model=MODEL_NAME)
+    log_start(task=TASK_NAME, env=BENCHMARK, model=model_chain[0])
 
     try:
         result = await env.reset(task_name=TASK_NAME)
@@ -210,7 +272,7 @@ async def main():
             if isinstance(obs, dict) and obs.get("done", False):
                 break
 
-            action_dict = get_action(client, obs, history)
+            action_dict = get_action(client, obs, history, model_chain, model_state)
             if action_dict is None:
                 break
             action_str = json.dumps(action_dict)
