@@ -41,5 +41,5 @@ server = "llmfleet_sre.server.app:main"
 
 [tool.setuptools]
 include-package-data = true
-packages = ["llmfleet_sre", "llmfleet_sre.server"]
-package-dir = { "llmfleet_sre" = ".", "llmfleet_sre.server" = "server" }
+packages = ["llmfleet_sre", "llmfleet_sre.server", "llmfleet_sre.tasks"]
+package-dir = { "llmfleet_sre" = ".", "llmfleet_sre.server" = "server", "llmfleet_sre.tasks" = "tasks" }
