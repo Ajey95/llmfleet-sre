@@ -28,7 +28,7 @@ except ImportError:
         LLMFleetAction, LLMFleetObservation, LLMFleetState,
         NodeState, IncomingRequest, ModelSpec
     )
-    from tasks import normalize_task_name
+    from tasks.definitions import normalize_task_name
 
 
 #  Static catalogue of available models 

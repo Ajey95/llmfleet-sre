@@ -5,6 +5,7 @@ from __future__ import annotations
 try:
     from ..tasks import TASKS, TASK_METADATA, grade
 except ImportError:
-    from tasks import TASKS, TASK_METADATA, grade
+    from tasks.definitions import TASKS, TASK_METADATA
+    from tasks.graders import grade
 
 __all__ = ["TASKS", "TASK_METADATA", "grade"]

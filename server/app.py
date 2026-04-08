@@ -19,7 +19,8 @@ try:
 except ImportError:
     from models import LLMFleetAction, LLMFleetObservation, LLMFleetState
     from server.environment import LLMFleetEnvironment
-    from tasks import TASKS, TASK_METADATA, normalize_task_name, grade
+    from tasks.definitions import TASKS, TASK_METADATA, normalize_task_name
+    from tasks.graders import grade
 
 def _env_factory():
     return LLMFleetEnvironment(task_name=TASKS[0], step_budget=30)
