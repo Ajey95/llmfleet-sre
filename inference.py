@@ -2,7 +2,11 @@
 LLMFleet-SRE baseline inference script.
 
 An LLM agent acts as an SRE for a simulated GPU inference cluster.
-Reads: API_BASE_URL, MODEL_NAME, API_KEY, IMAGE_NAME, TASK_NAME
+Reads: API_BASE_URL, MODEL_NAME, API_KEY, IMAGE_NAME, TASK_NAME.
+
+TASK_NAME may be a single task id or a comma-separated list.
+If not provided, defaults to easy,medium,hard so validators can observe
+multiple task runs.
 
 Emits exact [START], [STEP], [END] log format required by OpenEnv judges.
 """
@@ -65,7 +69,7 @@ MODEL_NAME   = os.environ.get("MODEL_NAME",   "meta-llama/Llama-3.1-8B-Instruct"
 # Must use evaluator-injected key only.
 API_KEY      = os.environ.get("API_KEY")
 IMAGE_NAME   = os.environ.get("IMAGE_NAME",   "Ajeya95/llmfleet-sre")
-TASK_NAME    = os.environ.get("TASK_NAME",    "task_easy")
+TASK_NAME    = os.environ.get("TASK_NAME",    "easy,medium,hard")
 FALLBACK_MODELS_RAW = os.environ.get(
     "FALLBACK_MODELS",
     "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B,Qwen/Qwen2.5-Coder-3B-Instruct,google/gemma-3n-E4B-it,Qwen/Qwen2.5-7B-Instruct,Qwen/Qwen3-4B-Instruct-2507",
@@ -82,10 +86,41 @@ PROMPT_QUEUE_LIMIT = int(os.environ.get("PROMPT_QUEUE_LIMIT", "12"))
 
 BENCHMARK = "llmfleet-sre"
 
+TASK_ALIASES = {
+    "task_easy": "easy",
+    "task_medium": "medium",
+    "task_hard": "hard",
+    "task_longhaul": "loghaul",
+    "med": "medium",
+}
+
 
 def debug_log(message: str) -> None:
     if DEBUG_LOGS:
         print(f"[DEBUG] {message}", flush=True)
+
+
+def _normalize_task_name(task_name: str) -> str:
+    return TASK_ALIASES.get(task_name.strip(), task_name.strip())
+
+
+def _parse_tasks_to_run(raw: str) -> List[str]:
+    raw = (raw or "").strip()
+    if not raw:
+        return ["easy", "medium", "hard"]
+    if raw.lower() in {"all", "*"}:
+        return ["easy", "medium", "hard", "loghaul"]
+
+    tasks = [_normalize_task_name(t) for t in raw.split(",") if t.strip()]
+    # Keep order while removing duplicates.
+    deduped: List[str] = []
+    seen = set()
+    for t in tasks:
+        if t in seen:
+            continue
+        seen.add(t)
+        deduped.append(t)
+    return deduped or ["easy", "medium", "hard"]
 
 
 def _build_model_chain(primary_model: str, fallback_raw: str) -> List[str]:
@@ -314,62 +349,65 @@ async def main():
     model_chain = _build_model_chain(MODEL_NAME, FALLBACK_MODELS_RAW)
     model_state = {"index": 0, "stopped_due_credit": False}
 
-    history: List[str] = []
-    rewards: List[float] = []
-    steps_taken = 0
-    score = 0.0
-    success = False
-    completed_episode = False
-
-    log_start(task=TASK_NAME, env=BENCHMARK, model=model_chain[0])
+    tasks_to_run = _parse_tasks_to_run(TASK_NAME)
 
     try:
-        result = await env.reset(task_name=TASK_NAME)
-        obs = result.observation.model_dump() if hasattr(result.observation, "model_dump") else result.observation
+        for task_name in tasks_to_run:
+            history: List[str] = []
+            rewards: List[float] = []
+            steps_taken = 0
+            score = 0.0
+            success = False
+            completed_episode = False
 
-        for step in range(1, MAX_STEPS + 1):
-            # Using dict .get() since obs is dumped to dict
-            if isinstance(obs, dict) and obs.get("done", False):
-                break
+            # Fresh model fallback state per task.
+            model_state = {"index": 0, "stopped_due_credit": False}
 
-            action_dict = get_action(client, obs, history, model_chain, model_state)
-            if action_dict is None:
-                break
-            action_str = json.dumps(action_dict, separators=(",", ":"))
+            log_start(task=task_name, env=BENCHMARK, model=model_chain[0])
 
-            try:
-                action_obj = LLMFleetAction(**action_dict)
-            except Exception as e:
-                debug_log(f"Invalid LLM action format: {e}")
-                action_obj = LLMFleetAction(action_type="noop", target_node=None, model_name=None, request_ids=[])
+            result = await env.reset(task_name=task_name)
+            obs = result.observation.model_dump() if hasattr(result.observation, "model_dump") else result.observation
 
-            step_result = await env.step(action_obj)
-            
-            new_obs = step_result.observation.model_dump() if hasattr(step_result.observation, "model_dump") else step_result.observation
-            
-            # get reward & done from step_result object, or from the new_obs dictionary gracefully
-            reward = float(getattr(step_result, "reward", 0.0) or (new_obs.get("reward", 0.0) if isinstance(new_obs, dict) else 0.0))
-            done = getattr(step_result, "done", False) or (new_obs.get("done", False) if isinstance(new_obs, dict) else False)
-            raw_error = getattr(step_result, "error", None)
-            if raw_error is None and isinstance(new_obs, dict):
-                raw_error = new_obs.get("last_action_error")
-            step_error = str(raw_error) if raw_error else None
+            for step in range(1, MAX_STEPS + 1):
+                if isinstance(obs, dict) and obs.get("done", False):
+                    break
 
-            rewards.append(reward)
-            steps_taken = step
-            obs = new_obs
+                action_dict = get_action(client, obs, history, model_chain, model_state)
+                if action_dict is None:
+                    break
+                action_str = json.dumps(action_dict, separators=(",", ":"))
 
-            log_step(step=step, action=action_str, reward=reward, done=done, error=step_error)
-            history.append(f"Step {step}: {action_str}  reward {reward:+.2f}")
+                try:
+                    action_obj = LLMFleetAction(**action_dict)
+                except Exception as e:
+                    debug_log(f"Invalid LLM action format: {e}")
+                    action_obj = LLMFleetAction(action_type="noop", target_node=None, model_name=None, request_ids=[])
 
-            if done:
-                completed_episode = True
-                break
+                step_result = await env.step(action_obj)
+                new_obs = step_result.observation.model_dump() if hasattr(step_result.observation, "model_dump") else step_result.observation
 
-        score = sum(rewards) / MAX_TOTAL_REWARD if MAX_TOTAL_REWARD > 0 else 0.0
-        score = max(STRICT_MIN_SCORE_OUTPUT, min(score, STRICT_MAX_SCORE_OUTPUT))
-        # A run that exits early (e.g., due to credits) should not be marked successful.
-        success = completed_episode and (score >= SUCCESS_THRESHOLD)
+                reward = float(getattr(step_result, "reward", 0.0) or (new_obs.get("reward", 0.0) if isinstance(new_obs, dict) else 0.0))
+                done = getattr(step_result, "done", False) or (new_obs.get("done", False) if isinstance(new_obs, dict) else False)
+                raw_error = getattr(step_result, "error", None)
+                if raw_error is None and isinstance(new_obs, dict):
+                    raw_error = new_obs.get("last_action_error")
+                step_error = str(raw_error) if raw_error else None
+
+                rewards.append(reward)
+                steps_taken = step
+                obs = new_obs
+
+                log_step(step=step, action=action_str, reward=reward, done=done, error=step_error)
+                history.append(f"Step {step}: {action_str}  reward {reward:+.2f}")
+
+                if done:
+                    completed_episode = True
+                    break
+
+            score = sum(rewards) / MAX_TOTAL_REWARD if MAX_TOTAL_REWARD > 0 else 0.0
+            score = max(STRICT_MIN_SCORE_OUTPUT, min(score, STRICT_MAX_SCORE_OUTPUT))
+            success = completed_episode and (score >= SUCCESS_THRESHOLD)
+            log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
 
     except Exception as e:
         import traceback
@@ -382,7 +420,6 @@ async def main():
                 env.close()
         except Exception as e:
             debug_log(f"env.close() error: {e}")
-        log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
 
 
 if __name__ == "__main__":
