@@ -15,7 +15,6 @@ except ImportError:
 
 
 def _safe_default_score() -> float:
-    # Keep strict range guarantee for reflection-based calls.
     return 0.5
 
 
@@ -73,49 +72,4 @@ def hard_grader(trajectory: Any = None, final_state: Any = None, **kwargs: Any) 
 
 def loghaul_grader(trajectory: Any = None, final_state: Any = None, **kwargs: Any) -> float:
     return _grade_task_name("loghaul", trajectory=trajectory, final_state=final_state, **kwargs)
-"""Explicit task grader entrypoints for evaluator compatibility."""
-
-from __future__ import annotations
-
-from typing import Any, Dict
-
-try:
-	from ..models import LLMFleetState
-	from ..tasks.definitions import normalize_task_name
-	from ..tasks.graders import grade
-except ImportError:
-	from models import LLMFleetState
-	from tasks.definitions import normalize_task_name
-	from tasks.graders import grade
-
-
-def _score(task_name: str, payload: Dict[str, Any] | None) -> float:
-	payload = payload or {}
-	# Accept both shapes:
-	# 1) {"final_state": {...}}
-	# 2) raw state dict
-	final_state = payload.get("final_state") if isinstance(payload.get("final_state"), dict) else payload
-	if not isinstance(final_state, dict):
-		return 0.01
-	try:
-		state = LLMFleetState(**final_state)
-	except Exception:
-		return 0.01
-	return grade(normalize_task_name(task_name), state)
-
-
-def easy_grader(trajectory: Dict[str, Any] | None = None) -> float:
-	return _score("easy", trajectory)
-
-
-def medium_grader(trajectory: Dict[str, Any] | None = None) -> float:
-	return _score("medium", trajectory)
-
-
-def hard_grader(trajectory: Dict[str, Any] | None = None) -> float:
-	return _score("hard", trajectory)
-
-
-def loghaul_grader(trajectory: Dict[str, Any] | None = None) -> float:
-	return _score("loghaul", trajectory)
 

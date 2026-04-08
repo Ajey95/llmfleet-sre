@@ -30,6 +30,7 @@ endpoints:
 
 tasks:
   - id: easy
+    has_grader: true
     description: >
       Route 5 queued chat requests to node_a which already has llama3-8b-chat loaded.
       No OOM crashes allowed. Correct action: route_batch to node_a.
@@ -38,6 +39,7 @@ tasks:
     grader: llmfleet_sre.server.graders.easy_grader
 
   - id: medium
+    has_grader: true
     description: >
       node_b has OOM-crashed. Recover it and clear a backing-up request queue
       under latency pressure. Correct actions: restart_node then route_batch.
@@ -46,6 +48,7 @@ tasks:
     grader: llmfleet_sre.server.graders.medium_grader
 
   - id: hard
+    has_grader: true
     description: >
       Evict chat models, load a code model, and serve a mixed premium/best-effort
       queue. Randomized starting state; adversarial mid-episode arrivals.
@@ -55,6 +58,7 @@ tasks:
     grader: llmfleet_sre.server.graders.hard_grader
 
   - id: loghaul
+    has_grader: true
     description: >
       Sustain cluster performance across a 50-step episode with a
       quiet-to-spike-to-quiet traffic shift. Agent must adapt policy
