@@ -4,8 +4,10 @@ from __future__ import annotations
 
 try:
     from ..models import LLMFleetState
+    from .definitions import normalize_task_name
 except ImportError:
     from models import LLMFleetState
+    from tasks.definitions import normalize_task_name
 
 STRICT_MIN_SCORE = 0.01
 STRICT_MAX_SCORE = 0.99
@@ -18,13 +20,14 @@ def _strict_open_unit(score: float) -> float:
 
 def grade(task_name: str, final_state: LLMFleetState) -> float:
     """Score the agent's performance on a completed episode."""
-    if task_name == "task_easy":
+    task_name = normalize_task_name(task_name)
+    if task_name == "easy":
         raw = _grade_easy(final_state)
-    elif task_name == "task_medium":
+    elif task_name == "medium":
         raw = _grade_medium(final_state)
-    elif task_name == "task_hard":
+    elif task_name == "hard":
         raw = _grade_hard(final_state)
-    elif task_name == "task_longhaul":
+    elif task_name == "loghaul":
         raw = _grade_longhaul(final_state)
     else:
         raw = 0.0

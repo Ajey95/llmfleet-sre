@@ -15,11 +15,11 @@ from urllib.parse import parse_qs
 try:
     from ..models import LLMFleetAction, LLMFleetObservation, LLMFleetState
     from .environment import LLMFleetEnvironment
-    from ..tasks import TASKS, TASK_METADATA, grade
+    from ..tasks import TASKS, TASK_METADATA, normalize_task_name, grade
 except ImportError:
     from models import LLMFleetAction, LLMFleetObservation, LLMFleetState
     from server.environment import LLMFleetEnvironment
-    from tasks import TASKS, TASK_METADATA, grade
+    from tasks import TASKS, TASK_METADATA, normalize_task_name, grade
 
 def _env_factory():
     return LLMFleetEnvironment(task_name=TASKS[0], step_budget=30)
@@ -42,10 +42,10 @@ class ResetQueryToBodyMiddleware:
             query = parse_qs(scope.get("query_string", b"").decode())
             payload = {}
             if query.get("task_name"):
-                payload["task_name"] = query["task_name"][0]
+                payload["task_name"] = normalize_task_name(query["task_name"][0])
             elif query.get("task_id"):
                 # openenv.yaml uses 'id' — map it to task_name for our environment
-                payload["task_name"] = query["task_id"][0]
+                payload["task_name"] = normalize_task_name(query["task_id"][0])
             if query.get("seed"):
                 seed_value = query["seed"][0]
                 try:
@@ -93,10 +93,18 @@ app.version = "1.0.0"
 @app.get("/tasks")
 async def list_tasks():
     """List all available tasks with grader metadata."""
+    # Include aliases so old clients can still discover supported legacy ids.
+    alias_tasks = [
+        {"id": "task_easy", "name": "task_easy", "difficulty": "easy", "has_grader": True, "alias_for": "easy"},
+        {"id": "task_medium", "name": "task_medium", "difficulty": "medium", "has_grader": True, "alias_for": "medium"},
+        {"id": "task_hard", "name": "task_hard", "difficulty": "hard", "has_grader": True, "alias_for": "hard"},
+        {"id": "task_longhaul", "name": "task_longhaul", "difficulty": "hard", "has_grader": True, "alias_for": "loghaul"},
+    ]
+    tasks = TASK_METADATA + alias_tasks
     return {
-        "tasks": TASK_METADATA,
-        "count": len(TASK_METADATA),
-        "graded_count": sum(1 for t in TASK_METADATA if t.get("has_grader")),
+        "tasks": tasks,
+        "count": len(tasks),
+        "graded_count": sum(1 for t in tasks if t.get("has_grader")),
     }
 
 
@@ -110,7 +118,7 @@ async def grade_episode(
     Score a completed episode.
     
     Args:
-        task_name: Name of the task (task_easy, task_medium, task_hard, or task_longhaul)
+        task_name: Name of the task (easy, medium, hard, or loghaul)
         final_state: Final LLMFleetState as a dictionary
     
     Returns:
@@ -128,6 +136,8 @@ async def grade_episode(
         body = body if isinstance(body, dict) else {}
 
         resolved_task_name = task_name or task_id or body.get("task_id") or body.get("task_name")
+        if resolved_task_name:
+            resolved_task_name = normalize_task_name(resolved_task_name)
 
         if isinstance(body.get("final_state"), dict):
             resolved_final_state = body.get("final_state")

@@ -9,7 +9,6 @@ description: >
   routing requests, recovering crashed nodes, and meeting SLA tiers.
   All compute is simulated; no GPU required.
 author: Ajeya95
-
 observation_space:
   type: text
   description: >
@@ -25,26 +24,26 @@ action_space:
 
 endpoints:
   health: /
-  reset:  /reset
-  step:   /step
-  state:  /state
+  reset: /reset
+  step: /step
+  state: /state
 
 tasks:
-  - id: task_easy
+  - id: easy
     description: >
       Route 5 queued chat requests to node_a which already has llama3-8b-chat loaded.
       No OOM crashes allowed. Correct action: route_batch to node_a.
     steps: 5
     ideal_action: route_batch
 
-  - id: task_medium
+  - id: medium
     description: >
       node_b has OOM-crashed. Recover it and clear a backing-up request queue
       under latency pressure. Correct actions: restart_node then route_batch.
     steps: 10
     ideal_action: restart_node
 
-  - id: task_hard
+  - id: hard
     description: >
       Evict chat models, load a code model, and serve a mixed premium/best-effort
       queue. Randomized starting state; adversarial mid-episode arrivals.
@@ -52,7 +51,7 @@ tasks:
     steps: 30
     ideal_action: load_model
 
-  - id: task_longhaul
+  - id: loghaul
     description: >
       Sustain cluster performance across a 50-step episode with a
       quiet-to-spike-to-quiet traffic shift. Agent must adapt policy

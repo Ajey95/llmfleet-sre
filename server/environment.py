@@ -22,11 +22,13 @@ try:
         LLMFleetAction, LLMFleetObservation, LLMFleetState,
         NodeState, IncomingRequest, ModelSpec
     )
+    from ..tasks import normalize_task_name
 except ImportError:
     from models import (
         LLMFleetAction, LLMFleetObservation, LLMFleetState,
         NodeState, IncomingRequest, ModelSpec
     )
+    from tasks import normalize_task_name
 
 
 #  Static catalogue of available models 
@@ -63,8 +65,8 @@ class LLMFleetEnvironment(Environment):
 
     SUPPORTS_CONCURRENT_SESSIONS: bool = True
 
-    def __init__(self, task_name: str = "task_easy", step_budget: int = 30, seed: Optional[int] = None):
-        self.task_name = task_name
+    def __init__(self, task_name: str = "easy", step_budget: int = 30, seed: Optional[int] = None):
+        self.task_name = normalize_task_name(task_name)
         self.step_budget = step_budget
         self.rng = random.Random(seed)
         self._reset_internal()
@@ -91,12 +93,12 @@ class LLMFleetEnvironment(Environment):
     def reset(self, task_name: Optional[str] = None, seed: Optional[int] = None) -> LLMFleetObservation:
         """Reset the environment for a new episode."""
         if task_name:
-            self.task_name = task_name
+            self.task_name = normalize_task_name(task_name)
         if seed is not None:
             self.rng = random.Random(seed)
         self._reset_internal()
         # Set step budget based on task
-        if self.task_name == "task_longhaul":
+        if self.task_name == "loghaul":
             self.step_budget = 50
         else:
             self.step_budget = 30
@@ -161,7 +163,7 @@ class LLMFleetEnvironment(Environment):
         self._cumulative_reward += reward
         # Longhaul is a fixed-horizon task; others may end early when queue is empty.
         done = self._step >= self.step_budget
-        if self.task_name != "task_longhaul" and len(self._request_queue) == 0:
+        if self.task_name != "loghaul" and len(self._request_queue) == 0:
             done = True
 
         return self._observe(result_msg, reward=reward, done=done)
@@ -278,14 +280,14 @@ class LLMFleetEnvironment(Environment):
 
     def _setup_for_task(self):
         """Pre-load models and seed queue based on task difficulty."""
-        if self.task_name == "task_easy":
+        if self.task_name == "easy":
             # Node A has the chat model. 5 chat requests in queue.
             self._nodes["node_a"].loaded_models = ["llama3-8b-chat"]
             self._nodes["node_a"].vram_used_gb = 18
             for _ in range(5):
                 self._add_request("chat", "best_effort")
 
-        elif self.task_name == "task_medium":
+        elif self.task_name == "medium":
             # Node B has OOM'd. Node A is healthy with chat model. Queue backing up.
             self._nodes["node_a"].loaded_models = ["llama3-8b-chat"]
             self._nodes["node_a"].vram_used_gb = 18
@@ -297,7 +299,7 @@ class LLMFleetEnvironment(Environment):
             for _ in range(4):
                 self._add_request("chat", "best_effort")
 
-        elif self.task_name == "task_hard":
+        elif self.task_name == "hard":
             # Randomized start prevents memorizing a fixed solution sequence.
             chat_models = ["llama3-8b-chat", "llama3-70b-chat"]
 
@@ -329,7 +331,7 @@ class LLMFleetEnvironment(Environment):
                 tier = "premium" if self.rng.random() < 0.5 else "best_effort"
                 self._add_request("chat", tier)
 
-        elif self.task_name == "task_longhaul":
+        elif self.task_name == "loghaul":
             # Mixed cluster: some models loaded, some free VRAM
             # Agent starts in a balanced state - challenge is sustaining it
             self._nodes["node_a"].loaded_models = ["llama3-8b-chat"]
