@@ -7,7 +7,8 @@ compatibly with openenv-core 0.2.x framework components.
 
 from __future__ import annotations
 import json
-from fastapi import FastAPI
+from typing import Any, Dict, Optional
+from fastapi import FastAPI, Query, Request
 from openenv.core.env_server import create_app
 from urllib.parse import parse_qs
 
@@ -100,7 +101,10 @@ async def list_tasks():
 
 
 @app.post("/grade")
-async def grade_episode(task_name: str, final_state: dict):
+async def grade_episode(
+    request: Request,
+    task_name: Optional[str] = Query(default=None),
+):
     """
     Score a completed episode.
     
@@ -112,13 +116,39 @@ async def grade_episode(task_name: str, final_state: dict):
         {"score": float in [0.0, 1.0], "task_name": str}
     """
     try:
-        # Reconstruct LLMFleetState from the dict
-        state = LLMFleetState(**final_state)
-        
-        score = grade(task_name, state)
-        return {"score": score, "task_name": task_name}
+        # Support both evaluator payload styles:
+        # 1) /grade?task_name=... with body=<state>
+        # 2) /grade with body={"task_name": ..., "final_state": {...}}
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+
+        body = body if isinstance(body, dict) else {}
+
+        resolved_task_name = task_name or body.get("task_name")
+
+        if isinstance(body.get("final_state"), dict):
+            resolved_final_state = body.get("final_state")
+        else:
+            # If task_name is in query, treat the whole body as raw final_state.
+            # This preserves compatibility with /grade?task_name=... + raw-state-body.
+            if task_name:
+                resolved_final_state = body if body else None
+            else:
+                # Without query task_name, avoid interpreting wrapper-only payloads as state.
+                resolved_final_state = body if body and "task_name" not in body else None
+
+        if not resolved_task_name:
+            return {"error": "task_name is required", "score": 0.0, "task_name": ""}
+        if not isinstance(resolved_final_state, dict):
+            return {"error": "final_state must be an object", "score": 0.0, "task_name": resolved_task_name}
+
+        state = LLMFleetState(**resolved_final_state)
+        score = grade(resolved_task_name, state)
+        return {"score": score, "task_name": resolved_task_name}
     except Exception as e:
-        return {"error": str(e), "score": 0.0, "task_name": task_name}
+        return {"error": str(e), "score": 0.0, "task_name": task_name or ""}
 
 def main(host: str = "0.0.0.0", port: int = 7860):
     """Entry point for direct execution."""
