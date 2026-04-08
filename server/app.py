@@ -50,7 +50,7 @@ if ENABLE_UI:
 
                 from .gradio_ui import create_ui
 
-                gr.mount_gradio_app(app, create_ui(), path=UI_PATH)
+                gr.mount_gradio_app(app, create_ui(), path=UI_PATH, root_path=UI_PATH)
                 UI_MOUNTED = True
         except Exception as exc:
                 print(f"[llmfleet_sre] UI mount skipped: {exc}")
