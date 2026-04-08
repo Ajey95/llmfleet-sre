@@ -77,6 +77,8 @@ DEBUG_LOGS = os.environ.get("DEBUG_LOGS", "false").strip().lower() in {"1", "tru
 MAX_STEPS         = 25
 MAX_TOTAL_REWARD  = 1.0
 SUCCESS_THRESHOLD = 0.6
+STRICT_MIN_SCORE_OUTPUT = 0.01
+STRICT_MAX_SCORE_OUTPUT = 0.99
 MAX_COMPLETION_TOKENS = int(os.environ.get("MAX_COMPLETION_TOKENS", "120"))
 PROMPT_QUEUE_LIMIT = int(os.environ.get("PROMPT_QUEUE_LIMIT", "12"))
 
@@ -363,7 +365,7 @@ async def main():
                 break
 
         score = sum(rewards) / MAX_TOTAL_REWARD if MAX_TOTAL_REWARD > 0 else 0.0
-        score = max(0.0, min(score, 1.0))
+        score = max(STRICT_MIN_SCORE_OUTPUT, min(score, STRICT_MAX_SCORE_OUTPUT))
         # A run that exits early (e.g., due to credits) should not be marked successful.
         success = completed_episode and (score >= SUCCESS_THRESHOLD)
 
