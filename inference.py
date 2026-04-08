@@ -2,7 +2,7 @@
 LLMFleet-SRE baseline inference script.
 
 An LLM agent acts as an SRE for a simulated GPU inference cluster.
-Reads: API_BASE_URL, MODEL_NAME, HF_TOKEN (as API key), IMAGE_NAME, TASK_NAME
+Reads: API_BASE_URL, MODEL_NAME, API_KEY/HF_TOKEN, IMAGE_NAME, TASK_NAME
 
 Emits exact [START], [STEP], [END] log format required by OpenEnv judges.
 """
@@ -65,7 +65,8 @@ if "api-inference.huggingface.co" in API_BASE_URL:
     # Keep backward compatibility with older .env values.
     API_BASE_URL = "https://router.huggingface.co/v1"
 MODEL_NAME   = os.environ.get("MODEL_NAME",   "meta-llama/Llama-3.1-8B-Instruct")
-API_KEY      = os.environ.get("HF_TOKEN")
+# Use injected hackathon key first; keep HF_TOKEN as local fallback.
+API_KEY      = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN")
 IMAGE_NAME   = os.environ.get("IMAGE_NAME",   "Ajeya95/llmfleet-sre")
 TASK_NAME    = os.environ.get("TASK_NAME",    "task_easy")
 FALLBACK_MODELS_RAW = os.environ.get(
@@ -296,7 +297,7 @@ What is your next action?"""
 
 async def main():
     if not API_KEY:
-        print("[ERROR] HF_TOKEN is not set.", flush=True)
+        print("[ERROR] API_KEY/HF_TOKEN is not set.", flush=True)
         return
 
     try:
@@ -307,7 +308,8 @@ async def main():
         print(f"[ERROR] Required packages missing: {e}. Run: pip install openenv-core", flush=True)
         return
 
-    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    # Must use injected API_BASE_URL/API_KEY in evaluation; local fallback remains available.
+    client = OpenAI(base_url=os.environ.get("API_BASE_URL", API_BASE_URL), api_key=API_KEY)
     env = await LLMFleetSreEnv.from_docker_image(IMAGE_NAME, provider=Port7860DockerProvider())
     model_chain = _build_model_chain(MODEL_NAME, FALLBACK_MODELS_RAW)
     model_state = {"index": 0, "stopped_due_credit": False}
