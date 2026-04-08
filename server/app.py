@@ -96,10 +96,10 @@ async def list_tasks():
     """List all available tasks with grader metadata."""
     # Include aliases so old clients can still discover supported legacy ids.
     alias_tasks = [
-        {"id": "task_easy", "name": "task_easy", "difficulty": "easy", "has_grader": True, "alias_for": "easy"},
-        {"id": "task_medium", "name": "task_medium", "difficulty": "medium", "has_grader": True, "alias_for": "medium"},
-        {"id": "task_hard", "name": "task_hard", "difficulty": "hard", "has_grader": True, "alias_for": "hard"},
-        {"id": "task_longhaul", "name": "task_longhaul", "difficulty": "hard", "has_grader": True, "alias_for": "loghaul"},
+        {"id": "task_easy", "name": "task_easy", "difficulty": "easy", "has_grader": True, "grader": "llmfleet_sre.server.graders.easy_grader", "alias_for": "easy"},
+        {"id": "task_medium", "name": "task_medium", "difficulty": "medium", "has_grader": True, "grader": "llmfleet_sre.server.graders.medium_grader", "alias_for": "medium"},
+        {"id": "task_hard", "name": "task_hard", "difficulty": "hard", "has_grader": True, "grader": "llmfleet_sre.server.graders.hard_grader", "alias_for": "hard"},
+        {"id": "task_longhaul", "name": "task_longhaul", "difficulty": "hard", "has_grader": True, "grader": "llmfleet_sre.server.graders.loghaul_grader", "alias_for": "loghaul"},
     ]
     tasks = TASK_METADATA + alias_tasks
     return {

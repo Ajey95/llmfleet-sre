@@ -35,6 +35,7 @@ tasks:
       No OOM crashes allowed. Correct action: route_batch to node_a.
     steps: 5
     ideal_action: route_batch
+    grader: llmfleet_sre.server.graders.easy_grader
 
   - id: medium
     description: >
@@ -42,6 +43,7 @@ tasks:
       under latency pressure. Correct actions: restart_node then route_batch.
     steps: 10
     ideal_action: restart_node
+    grader: llmfleet_sre.server.graders.medium_grader
 
   - id: hard
     description: >
@@ -50,6 +52,7 @@ tasks:
       Agent must learn eviction strategies across varied configurations.
     steps: 30
     ideal_action: load_model
+    grader: llmfleet_sre.server.graders.hard_grader
 
   - id: loghaul
     description: >
@@ -58,6 +61,7 @@ tasks:
       mid-episode, not memorize a fixed sequence.
     steps: 50
     ideal_action: route_batch
+    grader: llmfleet_sre.server.graders.loghaul_grader
 
 scoring:
   reward_range: [0.0, 1.0]
