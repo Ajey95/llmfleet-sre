@@ -15,11 +15,11 @@ from urllib.parse import parse_qs
 try:
     from ..models import LLMFleetAction, LLMFleetObservation, LLMFleetState
     from .environment import LLMFleetEnvironment
-    from .tasks import TASKS, grade
+    from ..tasks import TASKS, TASK_METADATA, grade
 except ImportError:
     from models import LLMFleetAction, LLMFleetObservation, LLMFleetState
     from server.environment import LLMFleetEnvironment
-    from server.tasks import TASKS, grade
+    from tasks import TASKS, TASK_METADATA, grade
 
 def _env_factory():
     return LLMFleetEnvironment(task_name=TASKS[0], step_budget=30)
@@ -91,12 +91,7 @@ app.version = "1.0.0"
 async def list_tasks():
     """List all available tasks."""
     return {
-        "tasks": [
-            {"name": "task_easy", "difficulty": "easy", "has_grader": True, "description": "Route 5 queued chat requests to a node that already has the model loaded."},
-            {"name": "task_medium", "difficulty": "medium", "has_grader": True, "description": "Recover an OOM-crashed node and clear a backing-up request queue under latency pressure."},
-            {"name": "task_hard", "difficulty": "hard", "has_grader": True, "description": "Evict chat models, load a code model, and serve a mixed premium/best-effort queue."},
-            {"name": "task_longhaul", "difficulty": "hard", "has_grader": True, "description": "Sustain cluster performance across a 50-step episode with a quiet-to-spike-to-quiet traffic shift."},
-        ]
+        "tasks": TASK_METADATA,
     }
 
 
