@@ -1055,7 +1055,7 @@ def preset_action(action_type: str, task_name: str, state_dict: Dict[str, Any]) 
 
 
 def create_ui() -> gr.Blocks:
-    with gr.Blocks(title="LLMFleet-SRE Operations Console") as demo:
+    with gr.Blocks(title="LLMFleet-SRE Operations Console", css=CUSTOM_CSS) as demo:
         gr.HTML(
             """
             <div class="hero-card">
@@ -1306,7 +1306,7 @@ If episode is already done, reset before next step.
 
 def main() -> None:
     app = create_ui()
-    app.launch(server_name=UI_HOST, server_port=UI_PORT, share=False, css=CUSTOM_CSS)
+    app.launch(server_name=UI_HOST, server_port=UI_PORT, share=False)
 
 
 if __name__ == "__main__":
