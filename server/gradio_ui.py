@@ -1287,7 +1287,7 @@ JSON template:
 }
 ```
 
-### End-to-end (ditto)
+### End-to-end
 
 ```text
 1) Probe
