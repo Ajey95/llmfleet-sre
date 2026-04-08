@@ -12,13 +12,13 @@ from openenv.core.env_server import create_app
 from urllib.parse import parse_qs
 
 try:
-    from ..models import LLMFleetAction, LLMFleetObservation
+    from ..models import LLMFleetAction, LLMFleetObservation, LLMFleetState
     from .environment import LLMFleetEnvironment
-    from .tasks import TASKS
+    from .tasks import TASKS, grade
 except ImportError:
-    from models import LLMFleetAction, LLMFleetObservation
+    from models import LLMFleetAction, LLMFleetObservation, LLMFleetState
     from server.environment import LLMFleetEnvironment
-    from server.tasks import TASKS
+    from server.tasks import TASKS, grade
 
 def _env_factory():
     return LLMFleetEnvironment(task_name=TASKS[0], step_budget=30)
@@ -97,6 +97,28 @@ async def list_tasks():
             {"name": "task_longhaul", "difficulty": "hard", "has_grader": True, "description": "Sustain cluster performance across a 50-step episode with a quiet-to-spike-to-quiet traffic shift."},
         ]
     }
+
+
+@app.post("/grade")
+async def grade_episode(task_name: str, final_state: dict):
+    """
+    Score a completed episode.
+    
+    Args:
+        task_name: Name of the task (task_easy, task_medium, task_hard, or task_longhaul)
+        final_state: Final LLMFleetState as a dictionary
+    
+    Returns:
+        {"score": float in [0.0, 1.0], "task_name": str}
+    """
+    try:
+        # Reconstruct LLMFleetState from the dict
+        state = LLMFleetState(**final_state)
+        
+        score = grade(task_name, state)
+        return {"score": score, "task_name": task_name}
+    except Exception as e:
+        return {"error": str(e), "score": 0.0, "task_name": task_name}
 
 def main(host: str = "0.0.0.0", port: int = 7860):
     """Entry point for direct execution."""
