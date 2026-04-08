@@ -13,15 +13,19 @@ tasks:
   - name: task_easy
     description: Route 5 queued chat requests to a node that already has the model loaded.
     difficulty: easy
+    has_grader: true
   - name: task_medium
     description: Recover an OOM-crashed node and clear a backing-up request queue under latency pressure.
     difficulty: medium
+    has_grader: true
   - name: task_hard
     description: Evict chat models, load a code model, and serve a mixed premium/best-effort queue.
     difficulty: hard
+    has_grader: true
   - name: task_longhaul
     description: Sustain cluster performance across a 50-step episode with a quiet-to-spike-to-quiet traffic shift.
     difficulty: hard
+    has_grader: true
 tags:
   - openenv
   - inference
