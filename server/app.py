@@ -1,4 +1,4 @@
-﻿"""
+"""
 FastAPI server for LLMFleet-SRE.
 
 Wraps the LLMFleetEnvironment and exposes it over HTTP and WebSockets
@@ -43,6 +43,9 @@ class ResetQueryToBodyMiddleware:
             payload = {}
             if query.get("task_name"):
                 payload["task_name"] = query["task_name"][0]
+            elif query.get("task_id"):
+                # openenv.yaml uses 'id' — map it to task_name for our environment
+                payload["task_name"] = query["task_id"][0]
             if query.get("seed"):
                 seed_value = query["seed"][0]
                 try:
@@ -89,9 +92,11 @@ app.version = "1.0.0"
 
 @app.get("/tasks")
 async def list_tasks():
-    """List all available tasks."""
+    """List all available tasks with grader metadata."""
     return {
         "tasks": TASK_METADATA,
+        "count": len(TASK_METADATA),
+        "graded_count": sum(1 for t in TASK_METADATA if t.get("has_grader")),
     }
 
 
@@ -99,6 +104,7 @@ async def list_tasks():
 async def grade_episode(
     request: Request,
     task_name: Optional[str] = Query(default=None),
+    task_id: Optional[str] = Query(default=None),
 ):
     """
     Score a completed episode.
@@ -121,7 +127,7 @@ async def grade_episode(
 
         body = body if isinstance(body, dict) else {}
 
-        resolved_task_name = task_name or body.get("task_name")
+        resolved_task_name = task_name or task_id or body.get("task_id") or body.get("task_name")
 
         if isinstance(body.get("final_state"), dict):
             resolved_final_state = body.get("final_state")

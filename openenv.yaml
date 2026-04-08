@@ -1,4 +1,4 @@
-﻿name: llmfleet-sre
+name: llmfleet-sre
 version: "1.0.0"
 emoji: 🐢
 colorFrom: blue
@@ -9,23 +9,67 @@ description: >
   routing requests, recovering crashed nodes, and meeting SLA tiers.
   All compute is simulated; no GPU required.
 author: Ajeya95
+
+observation_space:
+  type: text
+  description: >
+    Full cluster snapshot: node statuses, VRAM usage, loaded models,
+    pending request queue with SLA tiers, step budget, and action feedback.
+
+action_space:
+  type: structured
+  description: >
+    Agent chooses one of: route_batch, load_model, evict_model,
+    restart_node, or noop; with optional target_node, model_name,
+    and request_ids fields.
+
+endpoints:
+  health: /
+  reset:  /reset
+  step:   /step
+  state:  /state
+
 tasks:
-  - name: task_easy
-    description: Route 5 queued chat requests to a node that already has the model loaded.
-    difficulty: easy
-    has_grader: true
-  - name: task_medium
-    description: Recover an OOM-crashed node and clear a backing-up request queue under latency pressure.
-    difficulty: medium
-    has_grader: true
-  - name: task_hard
-    description: Evict chat models, load a code model, and serve a mixed premium/best-effort queue.
-    difficulty: hard
-    has_grader: true
-  - name: task_longhaul
-    description: Sustain cluster performance across a 50-step episode with a quiet-to-spike-to-quiet traffic shift.
-    difficulty: hard
-    has_grader: true
+  - id: task_easy
+    description: >
+      Route 5 queued chat requests to node_a which already has llama3-8b-chat loaded.
+      No OOM crashes allowed. Correct action: route_batch to node_a.
+    steps: 5
+    ideal_action: route_batch
+
+  - id: task_medium
+    description: >
+      node_b has OOM-crashed. Recover it and clear a backing-up request queue
+      under latency pressure. Correct actions: restart_node then route_batch.
+    steps: 10
+    ideal_action: restart_node
+
+  - id: task_hard
+    description: >
+      Evict chat models, load a code model, and serve a mixed premium/best-effort
+      queue. Randomized starting state; adversarial mid-episode arrivals.
+      Agent must learn eviction strategies across varied configurations.
+    steps: 30
+    ideal_action: load_model
+
+  - id: task_longhaul
+    description: >
+      Sustain cluster performance across a 50-step episode with a
+      quiet-to-spike-to-quiet traffic shift. Agent must adapt policy
+      mid-episode, not memorize a fixed sequence.
+    steps: 50
+    ideal_action: route_batch
+
+scoring:
+  reward_range: [0.0, 1.0]
+  success_threshold: 0.5
+  score_formula: mean(step_rewards)
+
+constraints:
+  max_runtime_seconds: 1200
+  max_memory_gb: 8
+  max_vcpu: 2
+
 tags:
   - openenv
   - inference
