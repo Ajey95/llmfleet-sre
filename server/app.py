@@ -48,9 +48,9 @@ if ENABLE_UI:
         try:
                 import gradio as gr
 
-                from .gradio_ui import create_ui
+                from .gradio_ui import CUSTOM_CSS, create_ui
 
-                gr.mount_gradio_app(app, create_ui(), path=UI_PATH, root_path=UI_PATH)
+                gr.mount_gradio_app(app, create_ui(), path=UI_PATH, root_path=UI_PATH, css=CUSTOM_CSS)
                 UI_MOUNTED = True
         except Exception as exc:
                 print(f"[llmfleet_sre] UI mount skipped: {exc}")
