@@ -2,7 +2,7 @@
 LLMFleet-SRE baseline inference script.
 
 An LLM agent acts as an SRE for a simulated GPU inference cluster.
-Reads: API_BASE_URL, MODEL_NAME, API_KEY/HF_TOKEN, IMAGE_NAME, TASK_NAME
+Reads: API_BASE_URL, MODEL_NAME, API_KEY, IMAGE_NAME, TASK_NAME
 
 Emits exact [START], [STEP], [END] log format required by OpenEnv judges.
 """
@@ -60,13 +60,10 @@ class Port7860DockerProvider(LocalDockerProvider):
         return f"http://localhost:{port}"
 
 #  Config 
-API_BASE_URL = os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1")
-if "api-inference.huggingface.co" in API_BASE_URL:
-    # Keep backward compatibility with older .env values.
-    API_BASE_URL = "https://router.huggingface.co/v1"
+API_BASE_URL = os.environ.get("API_BASE_URL")
 MODEL_NAME   = os.environ.get("MODEL_NAME",   "meta-llama/Llama-3.1-8B-Instruct")
-# Use injected hackathon key first; keep HF_TOKEN as local fallback.
-API_KEY      = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN")
+# Must use evaluator-injected key only.
+API_KEY      = os.environ.get("API_KEY")
 IMAGE_NAME   = os.environ.get("IMAGE_NAME",   "Ajeya95/llmfleet-sre")
 TASK_NAME    = os.environ.get("TASK_NAME",    "task_easy")
 FALLBACK_MODELS_RAW = os.environ.get(
@@ -296,9 +293,12 @@ What is your next action?"""
 #  Main loop 
 
 async def main():
+    if not API_BASE_URL:
+        print("[ERROR] API_BASE_URL is not set. Use the injected LiteLLM proxy URL.", flush=True)
+        raise SystemExit(1)
     if not API_KEY:
-        print("[ERROR] API_KEY/HF_TOKEN is not set.", flush=True)
-        return
+        print("[ERROR] API_KEY is not set. Use the injected evaluator API key.", flush=True)
+        raise SystemExit(1)
 
     try:
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -308,8 +308,8 @@ async def main():
         print(f"[ERROR] Required packages missing: {e}. Run: pip install openenv-core", flush=True)
         return
 
-    # Must use injected API_BASE_URL/API_KEY in evaluation; local fallback remains available.
-    client = OpenAI(base_url=os.environ.get("API_BASE_URL", API_BASE_URL), api_key=API_KEY)
+    # Must use injected API_BASE_URL/API_KEY in evaluation.
+    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
     env = await LLMFleetSreEnv.from_docker_image(IMAGE_NAME, provider=Port7860DockerProvider())
     model_chain = _build_model_chain(MODEL_NAME, FALLBACK_MODELS_RAW)
     model_state = {"index": 0, "stopped_due_credit": False}
