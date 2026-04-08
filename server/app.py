@@ -7,8 +7,10 @@ compatibly with openenv-core 0.2.x framework components.
 
 from __future__ import annotations
 import json
+import os
 from typing import Any, Dict, Optional
 from fastapi import FastAPI, Query, Request
+from fastapi.responses import HTMLResponse
 from openenv.core.env_server import create_app
 from urllib.parse import parse_qs
 
@@ -32,6 +34,86 @@ app = create_app(
     observation_cls=LLMFleetObservation,
     env_name="llmfleet-sre"
 )
+
+
+def _is_truthy(value: str) -> bool:
+        return value.strip().lower() not in {"", "0", "false", "no", "off"}
+
+
+ENABLE_UI = _is_truthy(os.getenv("LLMFLEET_ENABLE_UI", "1"))
+UI_PATH = os.getenv("LLMFLEET_UI_PATH", "/ui").strip() or "/ui"
+UI_MOUNTED = False
+
+if ENABLE_UI:
+        try:
+                import gradio as gr
+
+                from .gradio_ui import create_ui
+
+                gr.mount_gradio_app(app, create_ui(), path=UI_PATH)
+                UI_MOUNTED = True
+        except Exception as exc:
+                print(f"[llmfleet_sre] UI mount skipped: {exc}")
+
+
+@app.get("/", response_class=HTMLResponse)
+async def root_page():
+        """Simple launcher page that keeps API routes untouched and embeds the UI when available."""
+        if UI_MOUNTED:
+                return HTMLResponse(
+                        f"""
+                        <!doctype html>
+                        <html lang="en">
+                            <head>
+                                <meta charset="utf-8" />
+                                <meta name="viewport" content="width=device-width, initial-scale=1" />
+                                <title>LLMFleet-SRE</title>
+                                <style>
+                                    body {{ margin: 0; font-family: Arial, sans-serif; background: #0b1220; color: #e8eef8; }}
+                                    .wrap {{ padding: 16px; }}
+                                    .card {{ background: #111a2e; border: 1px solid #24324f; border-radius: 14px; padding: 14px; margin-bottom: 14px; }}
+                                    a {{ color: #8cc8ff; }}
+                                    iframe {{ width: 100%; height: 88vh; border: 1px solid #24324f; border-radius: 14px; background: #fff; }}
+                                    .muted {{ color: #a9b7cf; }}
+                                    code {{ background: #1a2742; padding: 2px 6px; border-radius: 6px; }}
+                                </style>
+                            </head>
+                            <body>
+                                <div class="wrap">
+                                    <div class="card">
+                                        <h2 style="margin-top:0">LLMFleet-SRE</h2>
+                                        <p class="muted" style="margin-bottom: 8px;">
+                                            API stays on the same container for evaluator checks. UI is mounted separately at <code>{UI_PATH}</code>.
+                                        </p>
+                                        <p style="margin:0">
+                                            API docs: <a href="/docs">/docs</a> | Tasks: <a href="/tasks">/tasks</a> | UI: <a href="{UI_PATH}">{UI_PATH}</a>
+                                        </p>
+                                    </div>
+                                    <iframe src="{UI_PATH}" title="LLMFleet-SRE UI"></iframe>
+                                </div>
+                            </body>
+                        </html>
+                        """
+                )
+
+        return HTMLResponse(
+                """
+                <!doctype html>
+                <html lang="en">
+                    <head>
+                        <meta charset="utf-8" />
+                        <meta name="viewport" content="width=device-width, initial-scale=1" />
+                        <title>LLMFleet-SRE API</title>
+                    </head>
+                    <body style="font-family: Arial, sans-serif; padding: 24px;">
+                        <h2>LLMFleet-SRE API</h2>
+                        <p>The evaluator-critical API is live in this container.</p>
+                        <p>Open <a href="/docs">/docs</a> for API docs or <a href="/tasks">/tasks</a> to discover canonical task ids.</p>
+                        <p>The UI is disabled or unavailable in this build.</p>
+                    </body>
+                </html>
+                """
+        )
 
 
 class ResetQueryToBodyMiddleware:
