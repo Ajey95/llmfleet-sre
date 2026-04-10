@@ -112,7 +112,6 @@ def _parse_tasks_to_run(raw: str) -> List[str]:
         return ["easy", "medium", "hard", "loghaul"]
 
     tasks = [_normalize_task_name(t) for t in raw.split(",") if t.strip()]
-    # Keep order while removing duplicates.
     deduped: List[str] = []
     seen = set()
     for t in tasks:
@@ -159,49 +158,6 @@ def _should_try_next_model(error_str: str) -> bool:
     )
 
 
-def _compact_observation(obs: dict, queue_limit: int) -> dict:
-    nodes = {}
-    for node_id, node in obs.get("nodes", {}).items():
-        nodes[node_id] = {
-            "status": node.get("status"),
-            "vram_used_gb": node.get("vram_used_gb"),
-            "vram_total_gb": node.get("vram_total_gb"),
-            "loaded_models": node.get("loaded_models", []),
-            "load_latency_remaining": node.get("load_latency_remaining", 0),
-        }
-
-    queue = obs.get("request_queue", [])
-    sorted_queue = sorted(
-        queue,
-        key=lambda r: (
-            0 if r.get("sla_tier") == "premium" else 1,
-            -int(r.get("age_steps", 0)),
-        ),
-    )
-    trimmed_queue = sorted_queue[:max(1, queue_limit)]
-    compact_queue = [
-        {
-            "request_id": r.get("request_id"),
-            "required_model": r.get("required_model"),
-            "sla_tier": r.get("sla_tier"),
-            "age_steps": r.get("age_steps", 0),
-        }
-        for r in trimmed_queue
-    ]
-
-    return {
-        "step": obs.get("step", 0),
-        "step_budget": obs.get("step_budget", 0),
-        "sla_violations": obs.get("sla_violations", 0),
-        "requests_served": obs.get("requests_served", 0),
-        "queue_total": len(queue),
-        "queue_shown": len(compact_queue),
-        "nodes": nodes,
-        "request_queue": compact_queue,
-        "last_action_result": obs.get("last_action_result", ""),
-    }
-
-
 #  Logging helpers (guideline format)
 
 def log_start(task, env, model):
@@ -217,55 +173,56 @@ def log_step(step, action, reward, done, error=None):
     )
 
 
-def log_end(success, steps, score, rewards):
+# FIX 3: add task= param to [END] log line
+def log_end(task, success, steps, score, rewards):
     rewards_str = ",".join(f"{float(r):.2f}" for r in rewards)
     print(
-        f"[END] success={str(bool(success)).lower()} steps={steps} score={float(score):.2f} rewards={rewards_str}",
+        f"[END] task={task} success={str(bool(success)).lower()} steps={steps} score={float(score):.2f} rewards={rewards_str}",
         flush=True,
     )
 
 
-#  Agent System Prompt 
+#  Agent System Prompt — updated for NL observations 
 
-SYSTEM_PROMPT = """You are an SRE managing an LLM inference cluster.
-You will receive the cluster state as JSON and must decide the next action.
+SYSTEM_PROMPT = """You are an expert SRE (Site Reliability Engineer) managing an LLM inference cluster.
 
-Available models and their VRAM cost (GB):
-- llama3-8b-chat: 18GB   (for chat tasks)
-- llama3-70b-chat: 45GB  (for chat tasks, large)
-- codellama-34b: 35GB    (for code tasks)
-- mistral-7b-sum: 16GB   (for summarize tasks)
-- code-lora-adapter: 8GB (adapter)
+You will receive a CLUSTER STATUS REPORT in plain English each step. Read it carefully and decide the single best action.
+
+Model VRAM requirements:
+- llama3-8b-chat: 18 GB  (serves: chat requests)
+- llama3-70b-chat: 45 GB (serves: chat requests, higher quality)
+- codellama-34b: 35 GB   (serves: code requests)
+- mistral-7b-sum: 16 GB  (serves: summarize requests)
+- code-lora-adapter: 8 GB (adapter)
 
 Node capacities:
-- node_a: 80GB VRAM
-- node_b: 80GB VRAM
-- node_c: 40GB VRAM
+- node_a: 80 GB VRAM
+- node_b: 80 GB VRAM
+- node_c: 40 GB VRAM
 
 Available actions:
-- route_batch: Route a list of request_ids to a target_node (node must have the required model loaded and status=healthy)
-- load_model: Load model_name onto target_node (CHECK: vram_used + model_vram <= vram_total to avoid OOM crash!)
-- evict_model: Evict model_name from target_node to free VRAM
-- restart_node: Restart a crashed node (status: oom_crashed)
-- noop: Do nothing this step
+- route_batch: Send a list of request_ids to a node. Node must be healthy with the required model loaded.
+- load_model: Load a model onto a node. CHECK: vram_used_gb + model_vram_gb must not exceed vram_total_gb or the node will OOM crash.
+- evict_model: Remove a model from a node to free VRAM.
+- restart_node: Restart a crashed (OOM) node. Clears all models. Node takes 2 steps to become healthy.
+- noop: Take no action this step.
 
-IMPORTANT RULES:
-1. Before load_model, always verify: node.vram_used_gb + model_vram_gb <= node.vram_total_gb
-2. You can only route to nodes with status=healthy AND load_latency_remaining=0
-3. Premium SLA requests must be served within 5 steps or you incur -0.3 penalty each
-4. Prioritize premium requests over best_effort
-5. A node with status=loading is not yet ready - do not route to it, wait or act on other nodes
-6. Each step you take exactly one action - plan the highest priority action only
+Decision rules:
+1. ALWAYS check VRAM free before load_model. Free = vram_total_gb - vram_used_gb.
+2. NEVER route to a node with status=loading or status=oom_crashed.
+3. Premium SLA requests breach in 5 steps — serve them first.
+4. If a node is OOM crashed, restart it before doing anything else on that node.
+5. Take exactly ONE action per step — choose the highest priority.
 
-Respond ONLY with a valid JSON object matching this schema:
+Respond ONLY with a valid JSON object:
 {
-  "action_type": "<one of the actions above>",
-  "target_node": "<node_a | node_b | node_c | null>",
-  "model_name": "<model name or null>",
-  "request_ids": ["<id1>", "<id2>"]
+  "action_type": "route_batch" | "load_model" | "evict_model" | "restart_node" | "noop",
+  "target_node": "node_a" | "node_b" | "node_c" | null,
+  "model_name": "<model name>" | null,
+  "request_ids": ["req_0001", ...]
 }
 
-Do not explain. Return only JSON.
+No explanation. Return only the JSON.
 """
 
 
@@ -276,15 +233,21 @@ def get_action(
     model_chain: List[str],
     model_state: dict,
 ) -> Optional[dict]:
-    compact_obs = _compact_observation(obs, PROMPT_QUEUE_LIMIT)
+    # Use last_action_result which now contains the full NL status report
+    nl_report = obs.get("last_action_result", "")
+    if not nl_report or not nl_report.strip().startswith("==="):
+        # Fallback: if NL report not present, build a minimal summary from raw obs fields
+        nodes_summary = json.dumps(obs.get("nodes", {}), separators=(",", ":"))
+        queue_summary = json.dumps(obs.get("request_queue", [])[:PROMPT_QUEUE_LIMIT], separators=(",", ":"))
+        nl_report = (
+            f"Step {obs.get('step', '?')}/{obs.get('step_budget', '?')} | "
+            f"served={obs.get('requests_served', 0)} violations={obs.get('sla_violations', 0)}\n"
+            f"Nodes: {nodes_summary}\nQueue: {queue_summary}"
+        )
+
     history_str = "\n".join(history[-3:]) if history else "None yet."
-    user_msg = f"""Current cluster state:
-{json.dumps(compact_obs, separators=(",", ":"))}
+    user_msg = f"{nl_report}\n\nRecent actions:\n{history_str}\n\nWhat is your next action?"
 
-Recent history:
-{history_str}
-
-What is your next action?"""
     while True:
         model_name = model_chain[model_state["index"]]
         try:
@@ -298,7 +261,6 @@ What is your next action?"""
                 temperature=0.0,
             )
             raw = resp.choices[0].message.content.strip()
-            # Strip markdown fences if present
             if raw.startswith("```"):
                 raw = raw.split("```")[1]
                 if raw.startswith("json"):
@@ -307,8 +269,6 @@ What is your next action?"""
         except Exception as e:
             error_str = str(e)
 
-            # Stop immediately on quota exhaustion to avoid burning additional
-            # failed requests while rotating fallbacks.
             if "402" in error_str or "credit" in error_str.lower() or "quota" in error_str.lower():
                 debug_log("Credit exhaustion - stopping inference")
                 model_state["stopped_due_credit"] = True
@@ -343,7 +303,6 @@ async def main():
         print(f"[ERROR] Required packages missing: {e}. Run: pip install openenv-core", flush=True)
         return
 
-    # Must use injected API_BASE_URL/API_KEY in evaluation.
     client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
     env = await LLMFleetSreEnv.from_docker_image(IMAGE_NAME, provider=Port7860DockerProvider())
     model_chain = _build_model_chain(MODEL_NAME, FALLBACK_MODELS_RAW)
@@ -360,7 +319,6 @@ async def main():
             success = False
             completed_episode = False
 
-            # Fresh model fallback state per task.
             model_state = {"index": 0, "stopped_due_credit": False}
 
             log_start(task=task_name, env=BENCHMARK, model=model_chain[0])
@@ -404,10 +362,15 @@ async def main():
                     completed_episode = True
                     break
 
-            score = sum(rewards) / MAX_TOTAL_REWARD if MAX_TOTAL_REWARD > 0 else 0.0
-            score = max(STRICT_MIN_SCORE_OUTPUT, min(score, STRICT_MAX_SCORE_OUTPUT))
+            # FIX 2: score formula from gotin repo — round(min(max(reward, 0.01), 0.99), 2)
+            if rewards:
+                raw_score = sum(rewards) / len(rewards)
+                score = round(min(max(raw_score, 0.01), 0.99), 2)
+            else:
+                score = 0.01
             success = completed_episode and (score >= SUCCESS_THRESHOLD)
-            log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
+            # FIX 3: pass task= to log_end
+            log_end(task=task_name, success=success, steps=steps_taken, score=score, rewards=rewards)
 
     except Exception as e:
         import traceback
@@ -424,4 +387,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
