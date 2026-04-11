@@ -174,21 +174,21 @@ app.description = (
 )
 app.version = "1.0.0"
 
-@app.get("/tasks")
+@app.get("/tasks", tags=["Environment Info"], summary="List all tasks with graders")
 async def list_tasks():
-    """List all available tasks with grader metadata."""
+    """Return the list of available tasks with grader metadata as a direct array.
+    
+    The validator expects a direct JSON array (not a wrapped dict) so it can
+    iterate tasks and confirm each has a grader attached.
+    """
     alias_tasks = [
         {"id": "task_easy", "name": "task_easy", "difficulty": "easy", "has_grader": True, "grader": "llmfleet_sre.server.graders.easy_grader", "alias_for": "easy"},
         {"id": "task_medium", "name": "task_medium", "difficulty": "medium", "has_grader": True, "grader": "llmfleet_sre.server.graders.medium_grader", "alias_for": "medium"},
         {"id": "task_hard", "name": "task_hard", "difficulty": "hard", "has_grader": True, "grader": "llmfleet_sre.server.graders.hard_grader", "alias_for": "hard"},
         {"id": "task_longhaul", "name": "task_longhaul", "difficulty": "hard", "has_grader": True, "grader": "llmfleet_sre.server.graders.loghaul_grader", "alias_for": "loghaul"},
     ]
-    tasks = TASK_METADATA + alias_tasks
-    return {
-        "tasks": tasks,
-        "count": len(tasks),
-        "graded_count": sum(1 for t in tasks if t.get("has_grader")),
-    }
+    # Return a direct list — validator expects JSON array, not a wrapped dict
+    return TASK_METADATA + alias_tasks
 
 
 @app.post("/grade")
