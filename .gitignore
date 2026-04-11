@@ -7,3 +7,7 @@ __pycache__/
 .mypy_cache/
 help.txt
 help2.txt
+.tmp_infer_logs/
+*.ps1
+tmp_*.py
+inference_reference.py
