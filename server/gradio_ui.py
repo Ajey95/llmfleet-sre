@@ -559,7 +559,7 @@ def _readme_overview_html() -> str:
             </div>
             <div class="readme-card">
                 <h4>Tasks</h4>
-                <p>Four canonical tasks: easy, medium, hard, and longhaul. Longhaul runs 50-step horizon.</p>
+                <p>Four canonical tasks: easy, medium, hard, and loghaul. Loghaul runs 50-step horizon.</p>
             </div>
             <div class="readme-card">
                 <h4>Actions</h4>
@@ -923,22 +923,28 @@ def suggest_action_with_llm(
 def do_probe(base_url: str):
     base = base_url.rstrip("/")
     tasks_data = _safe_get(f"{base}/tasks")
-    if tasks_data and isinstance(tasks_data.get("tasks"), list):
-        discovered = tasks_data.get("tasks", [])
-        canonical = []
-        for item in discovered:
-            if item.get("has_grader") and not item.get("alias_for"):
-                canonical.append(str(item.get("id") or item.get("name") or "").strip())
-        fallback = [t["name"] for t in TASK_META]
-        choices = canonical or fallback
-        default_task = choices[0] if choices else "easy"
-        return (
-            f'<div class="logline logline-ok">Connected to {base}</div>'
-            f'<div class="logline logline-step">Sync mode: persistent env client</div>'
-            f'<div class="logline logline-step">Detected {len(discovered)} tasks via /tasks</div>'
-            f'<div class="logline logline-debug">Canonical graded tasks: {", ".join(choices)}</div>',
-            gr.update(choices=choices, value=default_task)
-        )
+    # FIX: /tasks returns a direct list, not a dict with a "tasks" key
+    if tasks_data is not None:
+        discovered = tasks_data if isinstance(tasks_data, list) else tasks_data.get("tasks", [])
+        if isinstance(discovered, list) and discovered:
+            canonical = []
+            for item in discovered:
+                if isinstance(item, dict):
+                    # Accept tasks that have a grader field and are not aliases
+                    if not item.get("alias_for"):
+                        task_id = str(item.get("id") or item.get("name") or "").strip()
+                        if task_id:
+                            canonical.append(task_id)
+            fallback = [t["name"] for t in TASK_META]
+            choices = canonical if canonical else fallback
+            default_task = choices[0] if choices else "easy"
+            return (
+                f'<div class="logline logline-ok">Connected to {base}</div>'
+                f'<div class="logline logline-step">Sync mode: persistent env client</div>'
+                f'<div class="logline logline-step">Detected {len(discovered)} tasks via /tasks</div>'
+                f'<div class="logline logline-debug">Canonical graded tasks: {", ".join(choices)}</div>',
+                gr.update(choices=choices, value=default_task)
+            )
     return (
         f'<div class="logline logline-err">Connection check failed for {base}</div>'
         '<div class="logline logline-debug">Verify environment server is running and reachable.</div>',
