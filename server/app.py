@@ -11,8 +11,12 @@ import os
 from typing import Any, Dict, Optional
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse
-from openenv.core.env_server import create_app
 from urllib.parse import parse_qs
+
+try:
+    from openenv.core.env_server.http_server import create_app
+except ImportError:
+    from openenv.core.env_server import create_app
 
 try:
     from ..models import LLMFleetAction, LLMFleetObservation, LLMFleetState
@@ -24,15 +28,13 @@ except ImportError:
     from tasks.definitions import TASKS, TASK_METADATA, normalize_task_name
     from tasks.graders import grade
 
-def _env_factory():
-    return LLMFleetEnvironment(task_name=TASKS[0], step_budget=30)
-
-# Create the standard OpenEnv FastAPI app
+# Create the standard OpenEnv FastAPI app using class-based signature
 app = create_app(
-    env=_env_factory,
-    action_cls=LLMFleetAction,
-    observation_cls=LLMFleetObservation,
-    env_name="llmfleet-sre"
+    LLMFleetEnvironment,
+    LLMFleetAction,
+    LLMFleetObservation,
+    env_name="llmfleet-sre",
+    max_concurrent_envs=25,
 )
 
 
@@ -127,7 +129,6 @@ class ResetQueryToBodyMiddleware:
             if query.get("task_name"):
                 payload["task_name"] = normalize_task_name(query["task_name"][0])
             elif query.get("task_id"):
-                # openenv.yaml uses 'id' — map it to task_name for our environment
                 payload["task_name"] = normalize_task_name(query["task_id"][0])
             if query.get("seed"):
                 seed_value = query["seed"][0]
@@ -176,7 +177,6 @@ app.version = "1.0.0"
 @app.get("/tasks")
 async def list_tasks():
     """List all available tasks with grader metadata."""
-    # Include aliases so old clients can still discover supported legacy ids.
     alias_tasks = [
         {"id": "task_easy", "name": "task_easy", "difficulty": "easy", "has_grader": True, "grader": "llmfleet_sre.server.graders.easy_grader", "alias_for": "easy"},
         {"id": "task_medium", "name": "task_medium", "difficulty": "medium", "has_grader": True, "grader": "llmfleet_sre.server.graders.medium_grader", "alias_for": "medium"},
@@ -199,18 +199,8 @@ async def grade_episode(
 ):
     """
     Score a completed episode.
-    
-    Args:
-        task_name: Name of the task (easy, medium, hard, or loghaul)
-        final_state: Final LLMFleetState as a dictionary
-    
-    Returns:
-        {"score": float in [0.0, 1.0], "task_name": str}
     """
     try:
-        # Support both evaluator payload styles:
-        # 1) /grade?task_name=... with body=<state>
-        # 2) /grade with body={"task_name": ..., "final_state": {...}}
         try:
             body = await request.json()
         except Exception:
@@ -225,12 +215,9 @@ async def grade_episode(
         if isinstance(body.get("final_state"), dict):
             resolved_final_state = body.get("final_state")
         else:
-            # If task_name is in query, treat the whole body as raw final_state.
-            # This preserves compatibility with /grade?task_name=... + raw-state-body.
             if task_name:
                 resolved_final_state = body if body else None
             else:
-                # Without query task_name, avoid interpreting wrapper-only payloads as state.
                 resolved_final_state = body if body and "task_name" not in body else None
 
         if not resolved_task_name:
@@ -251,4 +238,3 @@ def main(host: str = "0.0.0.0", port: int = 7860):
 
 if __name__ == "__main__":
     main()
-

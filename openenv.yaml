@@ -1,3 +1,9 @@
+spec_version: "1"
+type: space
+runtime: fastapi
+app: server.app:app
+port: 7860
+
 name: llmfleet-sre
 version: "1.0.0"
 emoji: 🐢
@@ -14,6 +20,8 @@ observation_space:
   description: >
     Full cluster snapshot: node statuses, VRAM usage, loaded models,
     pending request queue with SLA tiers, step budget, and action feedback.
+    The `narrative` field contains a plain-English status report optimised
+    for language-model reasoning.
 
 action_space:
   type: structured

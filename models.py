@@ -1,4 +1,4 @@
-﻿"""
+"""
 Data models for the LLMFleet-SRE Environment.
 
 An LLM agent acts as an SRE for a simulated GPU inference cluster:
@@ -72,12 +72,17 @@ class LLMFleetObservation(Observation):
     """
     Full cluster snapshot returned after every step.
     This is what the agent sees.
+
+    `narrative` is the primary field the LLM agent should read —
+    a plain-English status report of the cluster state, designed
+    for language-model reasoning rather than JSON parsing.
     """
     nodes: Dict[str, NodeState] = Field(default_factory=dict, description="Current state of all nodes")
     request_queue: List[IncomingRequest] = Field(default_factory=list, description="Pending requests")
     step: int = Field(0, description="Current step number")
     step_budget: int = Field(30, description="Max steps in this episode")
-    last_action_result: str = Field("", description="Human-readable result of the last action")
+    last_action_result: str = Field("", description="Short human-readable result of the last action")
+    narrative: str = Field("", description="Full plain-English cluster status report for LLM agent reasoning")
     sla_violations: int = Field(0, description="Cumulative premium requests that waited > 5 steps")
     requests_served: int = Field(0, description="Cumulative successful serves")
     done: bool = Field(False, description="Whether the episode is over")
@@ -111,4 +116,3 @@ class LLMFleetReward(BaseModel):
     oom_penalty: float      # -0.5 for triggering an OOM crash
     sla_penalty: float      # -0.3 per premium request waiting > 5 steps
     cost_penalty: float     # additional penalty for expensive loaded models
-

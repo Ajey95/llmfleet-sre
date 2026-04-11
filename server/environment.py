@@ -1,4 +1,4 @@
-﻿"""
+"""
 LLMFleet-SRE Environment Simulation Logic.
 
 Simulates a 3-node GPU inference cluster where an LLM agent acts as an SRE:
@@ -182,7 +182,6 @@ class LLMFleetEnvironment(Environment):
         if seed is not None:
             self.rng = random.Random(seed)
         self._reset_internal()
-        # FIX 6: per-task step budgets matching openenv.yaml
         self.step_budget = TASK_STEP_BUDGETS.get(self.task_name, 30)
         self._setup_for_task()
         return self._observe("Episode started. Analyze the cluster and decide your first action.", reward=0.0, done=False)
@@ -438,7 +437,7 @@ class LLMFleetEnvironment(Environment):
                 self._add_request("summarize", "best_effort")
 
     def _inject_requests(self):
-        """Inject new requests each step based on task. FIX 1: canonical task names."""
+        """Inject new requests each step based on task."""
         if len(self._request_queue) >= MAX_QUEUE_SIZE:
             return
 
@@ -449,7 +448,6 @@ class LLMFleetEnvironment(Environment):
         else:
             arrival_rate = 0.3
 
-        # FIX 1: was "task_easy", "task_medium", "task_hard", "task_longhaul"
         if self.task_name == "easy":
             return  # fixed queue, no new arrivals
 
@@ -518,6 +516,7 @@ class LLMFleetEnvironment(Environment):
         ))
 
     def _observe(self, last_action_result: str, reward: float, done: bool) -> LLMFleetObservation:
+        """Build observation with both raw fields and the NL narrative."""
         nl_report = _format_nl_observation(
             nodes=self._nodes,
             request_queue=self._request_queue,
@@ -534,7 +533,8 @@ class LLMFleetEnvironment(Environment):
             request_queue=list(self._request_queue),
             step=self._step,
             step_budget=self.step_budget,
-            last_action_result=nl_report,
+            last_action_result=last_action_result,
+            narrative=nl_report,
             sla_violations=self._sla_violations,
             requests_served=self._requests_served,
             done=done,

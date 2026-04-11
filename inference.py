@@ -1,4 +1,4 @@
-﻿"""
+"""
 LLMFleet-SRE baseline inference script.
 
 An LLM agent acts as an SRE for a simulated GPU inference cluster.
@@ -173,7 +173,6 @@ def log_step(step, action, reward, done, error=None):
     )
 
 
-# FIX 3: add task= param to [END] log line
 def log_end(task, success, steps, score, rewards):
     rewards_str = ",".join(f"{float(r):.2f}" for r in rewards)
     print(
@@ -233,10 +232,12 @@ def get_action(
     model_chain: List[str],
     model_state: dict,
 ) -> Optional[dict]:
-    # Use last_action_result which now contains the full NL status report
-    nl_report = obs.get("last_action_result", "")
+    # PRIMARY: use the dedicated narrative field (plain-English cluster status report)
+    # FALLBACK: last_action_result (legacy — when narrative field is absent)
+    nl_report = obs.get("narrative", "") or obs.get("last_action_result", "")
+
     if not nl_report or not nl_report.strip().startswith("==="):
-        # Fallback: if NL report not present, build a minimal summary from raw obs fields
+        # Last-resort fallback: build minimal summary from raw obs fields
         nodes_summary = json.dumps(obs.get("nodes", {}), separators=(",", ":"))
         queue_summary = json.dumps(obs.get("request_queue", [])[:PROMPT_QUEUE_LIMIT], separators=(",", ":"))
         nl_report = (
@@ -362,14 +363,12 @@ async def main():
                     completed_episode = True
                     break
 
-            # FIX 2: score formula from gotin repo — round(min(max(reward, 0.01), 0.99), 2)
             if rewards:
                 raw_score = sum(rewards) / len(rewards)
                 score = round(min(max(raw_score, 0.01), 0.99), 2)
             else:
                 score = 0.01
             success = completed_episode and (score >= SUCCESS_THRESHOLD)
-            # FIX 3: pass task= to log_end
             log_end(task=task_name, success=success, steps=steps_taken, score=score, rewards=rewards)
 
     except Exception as e:
